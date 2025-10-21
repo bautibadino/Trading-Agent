@@ -10,12 +10,12 @@ import { Candle } from '../models/Candle.js';
 export type PositionSide = 'LONG' | 'SHORT';
 
 export interface StrategyConfig {
-  // Medias exponenciales
+  // Medias exponenciales - OPTIMIZADAS PARA SCALPING
   fastPeriod?: number;
   slowPeriod?: number;
   trendPeriod?: number;
 
-  // Gestión de riesgo clásica
+  // Gestión de riesgo - MÁS AGRESIVA PARA SCALPING
   atrPeriod?: number;
   atrStopMultiplier?: number;
   atrTakeProfitMultiplier?: number;
@@ -23,7 +23,7 @@ export interface StrategyConfig {
   // Compatibilidad con versiones anteriores
   positionSize?: number;
 
-  // Indicadores adicionales - RELAJADOS
+  // Indicadores adicionales - MÁS RÁPIDOS
   rsiPeriod?: number;
   stochasticPeriod?: number;
   stochasticSignalPeriod?: number;
@@ -33,20 +33,21 @@ export interface StrategyConfig {
   maxPositionSize?: number;
   volatilityAdjustment?: boolean;
 
-  // Filtros de mercado - RELAJADOS
+  // Filtros de mercado - MUY RELAJADOS
   minAtr?: number;
   maxAtr?: number;
   rsiOverbought?: number;
   rsiOversold?: number;
 
-  // Confirmaciones opcionales - DESACTIVADAS por defecto
+  // Confirmaciones opcionales - DESACTIVADAS para scalping
   requireMomentumConfirmation?: boolean;
   volumeWeighted?: boolean;
-  
-  // NUEVOS: Parámetros para aumentar oportunidades
-  allowShallowPullbacks?: boolean;
-  trendStrengthThreshold?: number;
-  minRiskRewardRatio?: number;
+
+  // NUEVOS: Parámetros específicos para scalping
+  maxTradeDuration?: number;
+  trailingStopEnabled?: boolean;
+  aggressiveMode?: boolean;
+  quickScalp?: boolean;
 }
 
 export interface StrategyPosition {
@@ -59,6 +60,7 @@ export interface StrategyPosition {
   entryTime: number;
   atrAtEntry: number;
   riskRewardRatio: number;
+  trailingStop?: number; // NUEVO: Para trailing stop
 }
 
 export interface EntryEvent {
@@ -102,7 +104,7 @@ interface IndicatorSnapshot {
 }
 
 /**
- * Estrategia de scalping basada en pullbacks con filtros optimizados para mayor frecuencia
+ * Estrategia de scalping basada en pullbacks - OPTIMIZADA PARA 1-5 MINUTOS
  */
 export class ScalpingPullbackStrategy {
   private readonly emaFast: EMA;
@@ -123,14 +125,15 @@ export class ScalpingPullbackStrategy {
   private readonly rsiOversold: number;
   private readonly requireMomentumConfirmation: boolean;
   private readonly volumeWeighted: boolean;
-  private readonly allowShallowPullbacks: boolean;
-  private readonly trendStrengthThreshold: number;
-  private readonly minRiskRewardRatio: number;
+  
+  // NUEVOS: Parámetros de scalping
+  private readonly maxTradeDuration: number;
+  private readonly trailingStopEnabled: boolean;
+  private readonly aggressiveMode: boolean;
+  private readonly quickScalp: boolean;
 
   private pullbackLongReady = false;
   private pullbackShortReady = false;
-  private shallowPullbackLongReady = false;
-  private shallowPullbackShortReady = false;
   private position: StrategyPosition | null = null;
   private lastCandle: Candle | null = null;
   private lastStochastic: StochasticResult | null = null;
@@ -143,13 +146,14 @@ export class ScalpingPullbackStrategy {
   private volumeSpikeDetected = false;
 
   constructor(private readonly config: StrategyConfig = {}) {
-    const fastPeriod = config.fastPeriod ?? 9;
-    const slowPeriod = config.slowPeriod ?? 21;
-    const trendPeriod = config.trendPeriod ?? 50;
-    const atrPeriod = config.atrPeriod ?? 14;
-    const rsiPeriod = config.rsiPeriod ?? 14;
-    const stochasticPeriod = config.stochasticPeriod ?? 14;
-    const stochasticSignalPeriod = config.stochasticSignalPeriod ?? 3;
+    // PARÁMETROS OPTIMIZADOS PARA SCALPING 1-5M
+    const fastPeriod = config.fastPeriod ?? 5;    // Más rápido
+    const slowPeriod = config.slowPeriod ?? 12;   // Optimizado
+    const trendPeriod = config.trendPeriod ?? 21; // Más reactivo
+    const atrPeriod = config.atrPeriod ?? 10;     // Más reactivo
+    const rsiPeriod = config.rsiPeriod ?? 9;      // RSI rápido
+    const stochasticPeriod = config.stochasticPeriod ?? 8;
+    const stochasticSignalPeriod = config.stochasticSignalPeriod ?? 2;
 
     this.emaFast = new EMA(fastPeriod);
     this.emaSlow = new EMA(slowPeriod);
@@ -162,26 +166,28 @@ export class ScalpingPullbackStrategy {
       stochasticSignalPeriod
     );
 
-    this.atrStopMultiplier = config.atrStopMultiplier ?? 1.2;
-    this.atrTakeProfitMultiplier = config.atrTakeProfitMultiplier ?? 1.8;
+    // GESTIÓN DE RIESGO MÁS AGRESIVA
+    this.atrStopMultiplier = config.atrStopMultiplier ?? 2.5;   // ← Más espacio
+    this.atrTakeProfitMultiplier = config.atrTakeProfitMultiplier ?? 3.0;
     this.basePositionSize = config.basePositionSize ?? config.positionSize ?? 1;
     this.maxPositionSize = config.maxPositionSize ?? Math.max(this.basePositionSize * 3, this.basePositionSize);
     this.volatilityAdjustment = config.volatilityAdjustment ?? true;
-    this.minAtr = config.minAtr ?? 0;
+    this.minAtr = config.minAtr ?? 0.5;
     this.maxAtr = config.maxAtr ?? Number.POSITIVE_INFINITY;
     
-    // FILTROS RELAJADOS - Menos restrictivos
-    this.rsiOverbought = config.rsiOverbought ?? 75;  // Más permisivo
-    this.rsiOversold = config.rsiOversold ?? 25;      // Más permisivo
+    // FILTROS MUY RELAJADOS para máxima frecuencia
+    this.rsiOverbought = config.rsiOverbought ?? 80;  // Muy permisivo
+    this.rsiOversold = config.rsiOversold ?? 20;      // Muy permisivo
     
-    // CONFIRMACIONES DESACTIVADAS por defecto
-    this.requireMomentumConfirmation = config.requireMomentumConfirmation ?? false; // DESACTIVADO
-    this.volumeWeighted = config.volumeWeighted ?? false; // DESACTIVADO
+    // CONFIRMACIONES DESACTIVADAS para scalping
+    this.requireMomentumConfirmation = config.requireMomentumConfirmation ?? false;
+    this.volumeWeighted = config.volumeWeighted ?? false;
     
-    // NUEVOS PARÁMETROS PARA MÁS OPERACIONES
-    this.allowShallowPullbacks = config.allowShallowPullbacks ?? true;
-    this.trendStrengthThreshold = config.trendStrengthThreshold ?? 0.3; // Más bajo
-    this.minRiskRewardRatio = config.minRiskRewardRatio ?? 1.2; // Más bajo
+    // NUEVOS PARÁMETROS DE SCALPING
+    this.maxTradeDuration = config.maxTradeDuration ?? 15; // 15 velas máximo
+    this.trailingStopEnabled = config.trailingStopEnabled ?? true;
+    this.aggressiveMode = config.aggressiveMode ?? true;
+    this.quickScalp = config.quickScalp ?? true;
   }
 
   update(candle: Candle, index: number): StrategyEvent[] {
@@ -201,18 +207,24 @@ export class ScalpingPullbackStrategy {
 
     this.updateMarketRegime(candle, indicators);
 
-    // Solo filtrar por ATR mínimo, no máximo
+    // Solo filtrar por ATR mínimo
     if (indicators.atrValue < this.minAtr) {
       this.resetPullbackFlags();
       return events;
     }
 
+    // PRIORIDAD: Gestionar posición existente
     if (this.position) {
       const exitEvent = this.evaluateExit(candle, index, indicators);
       if (exitEvent) {
         events.push(exitEvent);
+        // Salir inmediatamente después de cerrar para evitar entradas múltiples
+        return events;
       }
-    } else {
+    }
+
+    // Evaluar nuevas entradas solo si no hay posición
+    if (!this.position) {
       events.push(...this.evaluateEntry(candle, index, indicators));
     }
 
@@ -240,8 +252,6 @@ export class ScalpingPullbackStrategy {
     this.position = null;
     this.pullbackLongReady = false;
     this.pullbackShortReady = false;
-    this.shallowPullbackLongReady = false;
-    this.shallowPullbackShortReady = false;
     this.lastCandle = null;
     this.lastStochastic = null;
     this.consecutiveLosses = 0;
@@ -269,14 +279,14 @@ export class ScalpingPullbackStrategy {
       this.lastStochastic = null;
     }
     
-    // Solo actualizar análisis de momentum si está habilitado
+    // Solo actualizar análisis si está habilitado
     if (this.requireMomentumConfirmation || this.volumeWeighted) {
       this.updateMomentumAnalysis(candle);
     }
   }
 
   private updateMomentumAnalysis(candle: Candle): void {
-    const bufferSize = 20; // Reducido para ser más reactivo
+    const bufferSize = 10; // Más pequeño para scalping
 
     this.recentHighs.push(candle.high);
     this.recentLows.push(candle.low);
@@ -297,9 +307,8 @@ export class ScalpingPullbackStrategy {
       this.emaFast.isStable &&
       this.emaSlow.isStable &&
       this.emaTrend.isStable &&
-      this.atr.isStable &&
-      this.rsi.isStable
-      // Stochastic es opcional, no bloquear si no está estable
+      this.atr.isStable
+      // RSI y Stochastic son opcionales para no bloquear entradas
     );
   }
 
@@ -310,7 +319,7 @@ export class ScalpingPullbackStrategy {
     const atrValue = this.atr.getResult();
     const rsiValue = this.rsi.getResult();
 
-    if (fast === null || slow === null || trend === null || atrValue === null || rsiValue === null) {
+    if (fast === null || slow === null || trend === null || atrValue === null) {
       return null;
     }
 
@@ -319,7 +328,7 @@ export class ScalpingPullbackStrategy {
       slow,
       trend,
       atrValue,
-      rsiValue,
+      rsiValue: rsiValue ?? 50, // Valor por defecto si no está listo
       stochastic: this.lastStochastic
     };
   }
@@ -329,8 +338,8 @@ export class ScalpingPullbackStrategy {
       ? Math.abs(indicators.fast - indicators.slow) / indicators.atrValue 
       : 0;
 
-    // Umbral más bajo para detectar tendencia
-    this.marketRegime = trendStrength > this.trendStrengthThreshold ? 'TRENDING' : 'RANGING';
+    // Umbral más bajo para detectar tendencia en scalping
+    this.marketRegime = trendStrength > 0.2 ? 'TRENDING' : 'RANGING';
   }
 
   private calculatePositionSize(atrValue: number, confidence: number): number {
@@ -342,8 +351,8 @@ export class ScalpingPullbackStrategy {
     const volatilityFactor = atrValue > 0 ? Math.max(0.5, Math.min(1.5, atrBaseline / atrValue)) : 1;
     const streakFactor = this.consecutiveLosses > 2 ? 0.5 : this.consecutiveWins >= 3 ? 1.2 : 1.0;
     
-    // Confidence menos restrictiva
-    const confidenceFactor = 0.7 + confidence * 0.3;
+    // Confidence menos restrictiva para scalping
+    const confidenceFactor = 0.8 + confidence * 0.2;
 
     const size = this.basePositionSize * volatilityFactor * streakFactor * confidenceFactor;
     return Math.min(this.maxPositionSize, Math.max(0.1, Number(size.toFixed(4))));
@@ -354,17 +363,17 @@ export class ScalpingPullbackStrategy {
     indicators: IndicatorSnapshot,
     side: PositionSide
   ): number {
-    let confidence = 0.6; // Base más alta
+    let confidence = 0.7; // Base más alta para scalping
 
-    // RSI más permisivo
+    // RSI muy permisivo
     if (side === 'LONG' && indicators.rsiValue < this.rsiOverbought) {
-      confidence += 0.15;
+      confidence += 0.2;
     }
     if (side === 'SHORT' && indicators.rsiValue > this.rsiOversold) {
-      confidence += 0.15;
+      confidence += 0.2;
     }
 
-    // Stochastic opcional - solo si está disponible
+    // Stochastic opcional
     const stoch = indicators.stochastic;
     if (stoch && this.stochastic.isStable) {
       if (side === 'LONG' && stoch.stochK >= stoch.stochD) {
@@ -375,12 +384,7 @@ export class ScalpingPullbackStrategy {
       }
     }
 
-    // Volume opcional
-    if (this.volumeWeighted && this.volumeSpikeDetected) {
-      confidence += 0.1;
-    }
-
-    // Bonus por tendencia fuerte
+    // Bonus por tendencia
     if (this.marketRegime === 'TRENDING') {
       confidence += 0.1;
     }
@@ -422,14 +426,14 @@ export class ScalpingPullbackStrategy {
     const isUptrend = fast > slow && candle.close > trend;
     const isDowntrend = fast < slow && candle.close < trend;
 
-    // Filtros de RSI más permisivos
+    // Filtros muy permisivos para scalping
     const rsiFilterLong = rsiValue < this.rsiOverbought;
     const rsiFilterShort = rsiValue > this.rsiOversold;
 
-    // Risk-reward más bajo
-    const minRiskReward = this.minRiskRewardRatio;
+    // Risk-reward más bajo para scalping
+    const minRiskReward = 1.2;
 
-    // ENTRADAS REGULARES (pullbacks profundos)
+    // ENTRADAS REGULARES POR PULLBACK
     if (isUptrend && this.pullbackLongReady && candle.close > fast && rsiFilterLong) {
       if (this.hasMomentumConfirmation(candle, indicators, 'LONG')) {
         const confidence = this.calculateConfidence(candle, indicators, 'LONG');
@@ -451,7 +455,8 @@ export class ScalpingPullbackStrategy {
             entryIndex: index,
             entryTime: candle.openTime,
             atrAtEntry: atrValue,
-            riskRewardRatio
+            riskRewardRatio,
+            trailingStop: this.trailingStopEnabled ? stopLoss : undefined
           };
           this.pullbackLongReady = false;
           events.push({
@@ -464,56 +469,14 @@ export class ScalpingPullbackStrategy {
             units: positionSize,
             index,
             timestamp: candle.openTime,
-            reason: `Pullback profundo en tendencia alcista | RSI: ${rsiValue.toFixed(2)}`,
+            reason: `PULLBACK LONG | RSI:${rsiValue.toFixed(1)}`,
             confidence,
             riskRewardRatio
           });
         }
       }
     } 
-    // ENTRADAS SHALLOW (pullbacks suaves) - NUEVO
-    else if (this.allowShallowPullbacks && isUptrend && this.shallowPullbackLongReady && candle.close > fast && rsiFilterLong) {
-      if (this.hasMomentumConfirmation(candle, indicators, 'LONG')) {
-        const confidence = this.calculateConfidence(candle, indicators, 'LONG') * 0.8; // Menos confianza
-        const positionSize = this.calculatePositionSize(atrValue, confidence);
-
-        const stopLoss = candle.close - atrValue * this.atrStopMultiplier;
-        const takeProfit = candle.close + atrValue * this.atrTakeProfitMultiplier;
-        const riskRewardRatio = stopLoss < candle.close
-          ? (takeProfit - candle.close) / (candle.close - stopLoss)
-          : 0;
-
-        if (riskRewardRatio >= minRiskReward) {
-          this.position = {
-            side: 'LONG',
-            entryPrice: candle.close,
-            stopLoss,
-            takeProfit,
-            units: positionSize,
-            entryIndex: index,
-            entryTime: candle.openTime,
-            atrAtEntry: atrValue,
-            riskRewardRatio
-          };
-          this.shallowPullbackLongReady = false;
-          events.push({
-            type: 'ENTRY',
-            side: 'LONG',
-            price: candle.close,
-            stopLoss,
-            takeProfit,
-            atr: atrValue,
-            units: positionSize,
-            index,
-            timestamp: candle.openTime,
-            reason: `Pullback suave en tendencia alcista | RSI: ${rsiValue.toFixed(2)}`,
-            confidence,
-            riskRewardRatio
-          });
-        }
-      }
-    }
-    // SHORT REGULAR
+    // ENTRADAS SHORT POR THROWBACK
     else if (isDowntrend && this.pullbackShortReady && candle.close < fast && rsiFilterShort) {
       if (this.hasMomentumConfirmation(candle, indicators, 'SHORT')) {
         const confidence = this.calculateConfidence(candle, indicators, 'SHORT');
@@ -535,7 +498,8 @@ export class ScalpingPullbackStrategy {
             entryIndex: index,
             entryTime: candle.openTime,
             atrAtEntry: atrValue,
-            riskRewardRatio
+            riskRewardRatio,
+            trailingStop: this.trailingStopEnabled ? stopLoss : undefined
           };
           this.pullbackShortReady = false;
           events.push({
@@ -548,53 +512,113 @@ export class ScalpingPullbackStrategy {
             units: positionSize,
             index,
             timestamp: candle.openTime,
-            reason: `Throwback profundo en tendencia bajista | RSI: ${rsiValue.toFixed(2)}`,
+            reason: `THROWBACK SHORT | RSI:${rsiValue.toFixed(1)}`,
             confidence,
             riskRewardRatio
           });
         }
       }
     }
-    // SHORT SHALLOW - NUEVO
-    else if (this.allowShallowPullbacks && isDowntrend && this.shallowPullbackShortReady && candle.close < fast && rsiFilterShort) {
-      if (this.hasMomentumConfirmation(candle, indicators, 'SHORT')) {
-        const confidence = this.calculateConfidence(candle, indicators, 'SHORT') * 0.8;
+
+    // ENTRADAS AGRESIVAS ADICIONALES (modo scalping)
+    if (this.aggressiveMode && !this.position) {
+      events.push(...this.evaluateAggressiveEntries(candle, index, indicators));
+    }
+
+    return events;
+  }
+
+  private evaluateAggressiveEntries(
+    candle: Candle,
+    index: number,
+    indicators: IndicatorSnapshot
+  ): StrategyEvent[] {
+    const events: StrategyEvent[] = [];
+    const { fast, slow, trend, atrValue, rsiValue } = indicators;
+
+    const isUptrend = fast > slow && candle.close > trend;
+    const isDowntrend = fast < slow && candle.close < trend;
+
+    // ENTRADA AGRESIVA LONG: Momentum alcista fuerte
+    if (isUptrend && candle.close > fast && rsiValue < 75) {
+      const stopLoss = candle.close - atrValue * this.atrStopMultiplier;
+      const takeProfit = candle.close + atrValue * this.atrTakeProfitMultiplier;
+      const riskRewardRatio = stopLoss < candle.close
+        ? (takeProfit - candle.close) / (candle.close - stopLoss)
+        : 0;
+
+      if (riskRewardRatio >= 1.2) {
+        const confidence = 0.8; // Alta confianza para entradas agresivas
         const positionSize = this.calculatePositionSize(atrValue, confidence);
 
-        const stopLoss = candle.close + atrValue * this.atrStopMultiplier;
-        const takeProfit = candle.close - atrValue * this.atrTakeProfitMultiplier;
-        const riskRewardRatio = takeProfit < candle.close
-          ? (candle.close - takeProfit) / (stopLoss - candle.close)
-          : 0;
+        this.position = {
+          side: 'LONG',
+          entryPrice: candle.close,
+          stopLoss,
+          takeProfit,
+          units: positionSize,
+          entryIndex: index,
+          entryTime: candle.openTime,
+          atrAtEntry: atrValue,
+          riskRewardRatio,
+          trailingStop: this.trailingStopEnabled ? stopLoss : undefined
+        };
 
-        if (riskRewardRatio >= minRiskReward) {
-          this.position = {
-            side: 'SHORT',
-            entryPrice: candle.close,
-            stopLoss,
-            takeProfit,
-            units: positionSize,
-            entryIndex: index,
-            entryTime: candle.openTime,
-            atrAtEntry: atrValue,
-            riskRewardRatio
-          };
-          this.shallowPullbackShortReady = false;
-          events.push({
-            type: 'ENTRY',
-            side: 'SHORT',
-            price: candle.close,
-            stopLoss,
-            takeProfit,
-            atr: atrValue,
-            units: positionSize,
-            index,
-            timestamp: candle.openTime,
-            reason: `Throwback suave en tendencia bajista | RSI: ${rsiValue.toFixed(2)}`,
-            confidence,
-            riskRewardRatio
-          });
-        }
+        events.push({
+          type: 'ENTRY',
+          side: 'LONG',
+          price: candle.close,
+          stopLoss,
+          takeProfit,
+          atr: atrValue,
+          units: positionSize,
+          index,
+          timestamp: candle.openTime,
+          reason: `AGGRESSIVE LONG | Momentum`,
+          confidence,
+          riskRewardRatio
+        });
+      }
+    }
+    // ENTRADA AGRESIVA SHORT: Momentum bajista fuerte
+    else if (isDowntrend && candle.close < fast && rsiValue > 25) {
+      const stopLoss = candle.close + atrValue * this.atrStopMultiplier;
+      const takeProfit = candle.close - atrValue * this.atrTakeProfitMultiplier;
+      const riskRewardRatio = takeProfit < candle.close
+        ? (candle.close - takeProfit) / (stopLoss - candle.close)
+        : 0;
+
+      if (riskRewardRatio >= 1.2) {
+        const confidence = 0.8;
+        const positionSize = this.calculatePositionSize(atrValue, confidence);
+
+        this.position = {
+          side: 'SHORT',
+          entryPrice: candle.close,
+          stopLoss,
+          takeProfit,
+          units: positionSize,
+          entryIndex: index,
+          entryTime: candle.openTime,
+          atrAtEntry: atrValue,
+          riskRewardRatio,
+          trailingStop: this.trailingStopEnabled ? stopLoss : undefined
+        };
+
+        events.push({
+          type: 'ENTRY',
+          side: 'SHORT',
+          price: candle.close,
+          stopLoss,
+          takeProfit,
+          atr: atrValue,
+          units: positionSize,
+          index,
+          timestamp: candle.openTime,
+          reason: `AGGRESSIVE SHORT | Momentum`,
+          confidence,
+          riskRewardRatio
+        });
       }
     }
 
@@ -616,31 +640,51 @@ export class ScalpingPullbackStrategy {
     let exitPrice: number | null = null;
     let reason = '';
 
+    // ACTUALIZAR TRAILING STOP
+    if (this.trailingStopEnabled && position.trailingStop !== undefined) {
+      if (side === 'LONG' && candle.close > entryPrice) {
+        const newTrailingStop = candle.close - indicators.atrValue * this.atrStopMultiplier * 0.8;
+        if (newTrailingStop > position.trailingStop) {
+          position.trailingStop = newTrailingStop;
+        }
+      } else if (side === 'SHORT' && candle.close < entryPrice) {
+        const newTrailingStop = candle.close - indicators.atrValue * this.atrStopMultiplier * 0.8;
+        if (newTrailingStop < position.trailingStop) {
+          position.trailingStop = newTrailingStop;
+        }
+      }
+    }
+
+    const currentStop = position.trailingStop !== undefined ? position.trailingStop : stopLoss;
+
+    // VERIFICAR SALIDAS
     if (side === 'LONG') {
-      if (candle.low <= stopLoss) {
-        exitPrice = stopLoss;
-        reason = 'Stop Loss';
+      if (candle.low <= currentStop) {
+        exitPrice = currentStop;
+        reason = this.trailingStopEnabled ? 'Trailing Stop' : 'Stop Loss';
       } else if (candle.high >= takeProfit) {
         exitPrice = takeProfit;
         reason = 'Take Profit';
       }
     } else {
-      if (candle.high >= stopLoss) {
-        exitPrice = stopLoss;
-        reason = 'Stop Loss';
+      if (candle.high >= currentStop) {
+        exitPrice = currentStop;
+        reason = this.trailingStopEnabled ? 'Trailing Stop' : 'Stop Loss';
       } else if (candle.low <= takeProfit) {
         exitPrice = takeProfit;
         reason = 'Take Profit';
       }
     }
 
+    // SALIDA POR TIMEOUT (scalping)
+    const tradeDuration = index - entryIndex;
+    if (!exitPrice && tradeDuration >= this.maxTradeDuration) {
+      exitPrice = candle.close;
+      reason = 'Max Duration';
+    }
+
     if (exitPrice === null) {
-      if (this.shouldExitEarly(candle, indicators, position)) {
-        exitPrice = candle.close;
-        reason = 'Salida anticipada por cambio de momentum';
-      } else {
-        return null;
-      }
+      return null;
     }
 
     const pnl = side === 'LONG'
@@ -649,7 +693,6 @@ export class ScalpingPullbackStrategy {
 
     const riskPerUnit = Math.abs(entryPrice - stopLoss);
     const rMultiple = riskPerUnit > 0 ? (Math.abs(pnl) / (riskPerUnit * units)) * Math.sign(pnl) : 0;
-    const tradeDuration = index - entryIndex;
 
     this.position = null;
     this.updateTradeStatistics(pnl >= 0);
@@ -667,45 +710,15 @@ export class ScalpingPullbackStrategy {
     };
   }
 
-  private shouldExitEarly(
-    candle: Candle,
-    indicators: IndicatorSnapshot,
-    position: StrategyPosition
-  ): boolean {
-    const { side, entryTime } = position;
-    const { rsiValue, fast, slow } = indicators;
-
-    // Salidas tempranas menos agresivas
-    if (side === 'LONG' && rsiValue > 80) return true;
-    if (side === 'SHORT' && rsiValue < 20) return true;
-
-    // Reversión de tendencia principal
-    if (side === 'LONG' && fast < slow) return true;
-    if (side === 'SHORT' && fast > slow) return true;
-
-    // Timeout más generoso
-    const timeInTrade = candle.openTime - entryTime;
-    const maxHolding = 120 * 60 * 1000; // 2 horas máximo
-    if (timeInTrade > maxHolding) return true;
-
-    return false;
-  }
-
   private updatePullbackFlags(candle: Candle, indicators: IndicatorSnapshot): void {
     const { fast, slow, trend } = indicators;
 
     const isUptrend = fast > slow && candle.close > trend;
     const isDowntrend = fast < slow && candle.close < trend;
 
-    // PULLBACKS REGULARES (profundos)
-    this.pullbackLongReady = isUptrend && candle.close < fast && candle.low > slow;
-    this.pullbackShortReady = isDowntrend && candle.close > fast && candle.high < slow;
-
-    // PULLBACKS SHALLOW (suaves) - NUEVO: permitir tocar la EMA lenta
-    if (this.allowShallowPullbacks) {
-      this.shallowPullbackLongReady = isUptrend && candle.close < fast && candle.low <= slow && candle.low > trend;
-      this.shallowPullbackShortReady = isDowntrend && candle.close > fast && candle.high >= slow && candle.high < trend;
-    }
+    // DETECCIÓN MÁS SENSIBLE para scalping
+    this.pullbackLongReady = isUptrend && candle.close < fast;
+    this.pullbackShortReady = isDowntrend && candle.close > fast;
   }
 
   private updateTradeStatistics(isWin: boolean): void {
@@ -721,7 +734,5 @@ export class ScalpingPullbackStrategy {
   private resetPullbackFlags(): void {
     this.pullbackLongReady = false;
     this.pullbackShortReady = false;
-    this.shallowPullbackLongReady = false;
-    this.shallowPullbackShortReady = false;
   }
 }
