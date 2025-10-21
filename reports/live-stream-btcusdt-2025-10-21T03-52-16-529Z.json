@@ -1,0 +1,78 @@
+{
+  "metadata": {
+    "mode": "stream",
+    "startedAt": "2025-10-21T03:51:30.436Z",
+    "finishedAt": "2025-10-21T03:52:16.519Z",
+    "durationMs": 46083,
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "candlesProcessed": 500,
+    "warmupCandles": 500,
+    "liveCandlesProcessed": 0,
+    "delayMs": 0,
+    "connectionTimeoutMs": 10000,
+    "candleWindow": {
+      "openTime": 1760988720000,
+      "closeTime": 1761018719999,
+      "openTimeISO": "2025-10-20T19:32:00.000Z",
+      "closeTimeISO": "2025-10-21T03:51:59.999Z"
+    }
+  },
+  "options": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "limit": 500,
+    "delay": 0,
+    "fastPeriod": 9,
+    "slowPeriod": 21,
+    "trendPeriod": 50,
+    "atrPeriod": 14,
+    "atrStop": 1.2,
+    "atrTp": 1.8,
+    "positionSize": 1,
+    "minAtr": 0,
+    "initialBalance": 0,
+    "mode": "stream",
+    "warmup": 500,
+    "connectionTimeout": 10000
+  },
+  "strategyConfig": {
+    "fastPeriod": 9,
+    "slowPeriod": 21,
+    "trendPeriod": 50,
+    "atrPeriod": 14,
+    "atrStopMultiplier": 1.2,
+    "atrTakeProfitMultiplier": 1.8,
+    "basePositionSize": 1,
+    "positionSize": 1,
+    "minAtr": 0
+  },
+  "stats": {
+    "balance": 0,
+    "openPosition": null,
+    "totalTrades": 0,
+    "wins": 0,
+    "losses": 0,
+    "pnl": 0,
+    "maxDrawdown": 0,
+    "peakBalance": 0
+  },
+  "summary": {
+    "initialBalance": 0,
+    "finalBalance": 0,
+    "netPnl": 0,
+    "totalTrades": 0,
+    "wins": 0,
+    "losses": 0,
+    "winRate": 0,
+    "maxDrawdown": 0,
+    "averageTradePnl": 0
+  },
+  "tradeStatistics": {
+    "consecutiveWins": 2,
+    "consecutiveLosses": 0
+  },
+  "marketRegime": "TRENDING",
+  "events": [],
+  "openPosition": null
+}

@@ -1,0 +1,106 @@
+{
+  "metadata": {
+    "mode": "stream",
+    "startedAt": "2025-10-21T03:52:45.196Z",
+    "finishedAt": "2025-10-21T04:03:25.058Z",
+    "durationMs": 639862,
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "candlesProcessed": 510,
+    "warmupCandles": 500,
+    "liveCandlesProcessed": 10,
+    "delayMs": 0,
+    "connectionTimeoutMs": 10000,
+    "candleWindow": {
+      "openTime": 1760988780000,
+      "closeTime": 1761019379999,
+      "openTimeISO": "2025-10-20T19:33:00.000Z",
+      "closeTimeISO": "2025-10-21T04:02:59.999Z"
+    }
+  },
+  "options": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "limit": 500,
+    "delay": 0,
+    "fastPeriod": 9,
+    "slowPeriod": 21,
+    "trendPeriod": 50,
+    "atrPeriod": 14,
+    "atrStop": 1.2,
+    "atrTp": 1.8,
+    "positionSize": 1,
+    "minAtr": 0,
+    "initialBalance": 0,
+    "mode": "stream",
+    "warmup": 500,
+    "connectionTimeout": 10000
+  },
+  "strategyConfig": {
+    "fastPeriod": 9,
+    "slowPeriod": 21,
+    "trendPeriod": 50,
+    "atrPeriod": 14,
+    "atrStopMultiplier": 1.2,
+    "atrTakeProfitMultiplier": 1.8,
+    "basePositionSize": 1,
+    "positionSize": 1,
+    "minAtr": 0
+  },
+  "stats": {
+    "balance": 62.59039553757291,
+    "openPosition": null,
+    "totalTrades": 1,
+    "wins": 1,
+    "losses": 0,
+    "pnl": 62.59039553757291,
+    "maxDrawdown": 0,
+    "peakBalance": 62.59039553757291
+  },
+  "summary": {
+    "initialBalance": 0,
+    "finalBalance": 62.59039553757291,
+    "netPnl": 62.59039553757291,
+    "totalTrades": 1,
+    "wins": 1,
+    "losses": 0,
+    "winRate": 1,
+    "maxDrawdown": 0,
+    "averageTradePnl": 62.59039553757291
+  },
+  "tradeStatistics": {
+    "consecutiveWins": 3,
+    "consecutiveLosses": 0
+  },
+  "marketRegime": "TRENDING",
+  "events": [
+    {
+      "type": "ENTRY",
+      "side": "SHORT",
+      "price": 109246,
+      "stopLoss": 109304.35475015285,
+      "takeProfit": 109158.46787477072,
+      "atr": 48.628958460709065,
+      "units": 0.96,
+      "index": 501,
+      "timestamp": 1761018840000,
+      "reason": "AGGRESSIVE SHORT | Momentum",
+      "confidence": 0.8,
+      "riskRewardRatio": 1.5,
+      "source": "live"
+    },
+    {
+      "type": "EXIT",
+      "side": "SHORT",
+      "price": 109180.80167131503,
+      "pnl": 62.59039553757291,
+      "rMultiple": 1.1172754319775868,
+      "index": 502,
+      "timestamp": 1761018959999,
+      "reason": "Trailing Stop",
+      "tradeDuration": 1,
+      "source": "live"
+    }
+  ],
+  "openPosition": null
+}

@@ -18,6 +18,8 @@
     "live:eth": "node dist/scripts/live-scalping-backtest.js --preset=eth-scalp",
     "prelive:btc": "npm run build",
     "live:btc": "node dist/scripts/live-scalping-backtest.js --preset=btc-scalp-fast",
+    "prelive:stream": "npm run build",
+    "live:stream": "npx --yes node@22 --dns-result-order=ipv4first dist/scripts/live-scalping-backtest.js --mode=stream",
     "live:help": "node dist/scripts/live-scalping-backtest.js --help"
   },
   "keywords": [

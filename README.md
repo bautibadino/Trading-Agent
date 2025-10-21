@@ -41,6 +41,7 @@ npm run live                          # backtest scalping pullback (defaults BTC
 npm run live:help                     # muestra todas las flags disponibles
 npm run live:eth                      # preset ETH 1m, 300 velas, delay 100ms, balance 10k
 npm run live:btc                      # preset BTC scalping rápido
+npm run live:stream                   # modo streaming (WebSocket) con warmup de 500 velas por defecto
 npm run live -- --symbol ETHUSDT --interval 1m --limit 300 --delay 100
 ```
 
@@ -97,9 +98,11 @@ package-lock.json
 ## 🧪 Backtest en vivo con trading-signals
 - Estrategia `live-scalping-backtest` usa `trading-signals` (EMA/ATR) para detectar pullbacks/throwbacks de scalping.
 - Ejecutá `npm run live` para simular secuencialmente velas históricas en consola o `npm run live:help` para ver todas las flags y presets (`eth-scalp`, `btc-scalp-fast`, etc.).
-- Flags disponibles: `--symbol`, `--interval`, `--limit`, `--delay`, `--fast`, `--slow`, `--trend`, `--atr`, `--atrStop`, `--atrTp`, `--size`, `--minAtr`, `--balance`. Ahora podés usarlas tanto con `--clave=valor` como con `--clave valor`.
+- Flags disponibles: `--symbol`, `--interval`, `--limit`, `--delay`, `--fast`, `--slow`, `--trend`, `--atr`, `--atrStop`, `--atrTp`, `--size`, `--minAtr`, `--balance`, `--mode` (`rest`|`stream`), `--warmup` y `--timeout`. Ahora podés usarlas tanto con `--clave=valor` como con `--clave valor`.
+- `--mode=rest` (por defecto) procesa velas históricas; `--mode=stream` se conecta al WebSocket y ejecuta la estrategia en tiempo real. `--warmup` define cuántas velas históricas precalientan los indicadores antes de iniciar el streaming y `--timeout` ajusta el handshake del WebSocket (ideal si tu red cierra sockets IPv6).
+- `--mode=rest` (por defecto) procesa velas históricas; `--mode=stream` se conecta al WebSocket y ejecuta la estrategia en tiempo real. `--warmup` define cuántas velas históricas precalientan los indicadores antes de iniciar el streaming.
 - Salida mejorada: cada entrada/salida se imprime en tablas con colores, mostrando SL/TP, ATR/R múltiple, PnL y balance actualizado para facilitar la lectura en consola.
-- Cada corrida guarda un JSON en `reports/` con todos los parámetros usados, eventos (entradas/salidas) y métricas de performance para análisis posterior.
+- Cada corrida guarda un JSON en `reports/` con todos los parámetros usados, eventos (entradas/salidas) y métricas de performance para análisis posterior (los archivos de streaming se guardan con prefijo `live-stream-*`).
 - Resumen final en tabla con capital inicial, PnL neto, trades, win rate y drawdown máximo.
 
 ## ➡️ Qué hacer a partir de aquí

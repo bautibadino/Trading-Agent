@@ -7,12 +7,15 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { BinanceClient } from '../src/index.js';
 import { Candle } from '../src/models/Candle.js';
+import { WebSocketService } from '../src/services/WebSocketService.js';
 import { ScalpingPullbackStrategy } from '../src/strategies/ScalpingPullbackStrategy.js';
 import type {
   StrategyConfig,
   StrategyEvent,
   StrategyPosition
 } from '../src/strategies/ScalpingPullbackStrategy.js';
+
+type RunMode = 'rest' | 'stream';
 
 interface CLIOptions {
   symbol: string;
@@ -28,6 +31,9 @@ interface CLIOptions {
   positionSize: number;
   minAtr: number;
   initialBalance: number;
+  mode: RunMode;
+  warmup: number;
+  connectionTimeout: number;
   preset?: string;
 }
 
@@ -135,6 +141,9 @@ const printHelp = (): void => {
     ['--size', 'Tamaño de posición (unidades)', '1'],
     ['--minatr', 'ATR mínimo requerido', '0.25'],
     ['--balance', 'Capital inicial para estadística', '10000'],
+    ['--mode', 'Origen de datos: rest (histórico) o stream (WebSocket)', 'stream'],
+    ['--warmup', 'Velas históricas para calentar indicadores (solo stream)', '500'],
+    ['--timeout', 'Timeout de conexión al WebSocket (ms)', '15000'],
     ['--preset', 'Carga una configuración predefinida', 'eth-scalp'],
     ['--help', 'Muestra esta ayuda', '']
   );
@@ -182,6 +191,9 @@ const parseCliOptions = (): CLIOptions => {
   positionSize: 1,
   minAtr: 0,
   initialBalance: 0,
+  mode: 'rest',
+  warmup: 500,
+  connectionTimeout: 10_000,
   preset: undefined
 };
 
@@ -234,13 +246,31 @@ const parseCliOptions = (): CLIOptions => {
     'timeframe'
   );
 
+  assignString(
+    (value) => {
+      const normalized = value.toLowerCase();
+      if (normalized === 'rest' || normalized === 'stream') {
+        options.mode = normalized as RunMode;
+      }
+    },
+    'mode'
+  );
+
   assignNumber((value) => {
     options.limit = value;
   }, 'limit', 'candles');
 
   assignNumber((value) => {
+    options.warmup = value;
+  }, 'warmup');
+
+  assignNumber((value) => {
     options.delay = value;
   }, 'delay', 'sleep');
+
+  assignNumber((value) => {
+    options.connectionTimeout = value;
+  }, 'timeout', 'connectiontimeout');
 
   assignNumber((value) => {
     options.fastPeriod = value;
@@ -329,8 +359,11 @@ interface RunSummary {
   averageTradePnl: number;
 }
 
+type RecordedEvent = StrategyEvent & { source: 'rest' | 'warmup' | 'live' };
+
 interface RunReport {
   metadata: {
+    mode: RunMode;
     startedAt: string;
     finishedAt: string;
     durationMs: number;
@@ -338,6 +371,7 @@ interface RunReport {
     interval: string;
     candlesProcessed: number;
     delayMs: number;
+    connectionTimeoutMs: number;
     preset?: string;
     candleWindow: {
       openTime: number | null;
@@ -345,6 +379,8 @@ interface RunReport {
       openTimeISO: string | null;
       closeTimeISO: string | null;
     };
+    warmupCandles?: number;
+    liveCandlesProcessed?: number;
   };
   options: CLIOptions;
   strategyConfig: StrategyConfig;
@@ -355,7 +391,7 @@ interface RunReport {
     consecutiveLosses: number;
   };
   marketRegime: string;
-  events: StrategyEvent[];
+  events: RecordedEvent[];
   openPosition: StrategyPosition | null;
 }
 
@@ -370,7 +406,18 @@ const stats: Stats = {
   peakBalance: initialBalance
 };
 
-const eventHistory: StrategyEvent[] = [];
+const eventHistory: RecordedEvent[] = [];
+
+const resetStats = (): void => {
+  stats.balance = initialBalance;
+  stats.openPosition = null;
+  stats.totalTrades = 0;
+  stats.wins = 0;
+  stats.losses = 0;
+  stats.pnl = 0;
+  stats.maxDrawdown = 0;
+  stats.peakBalance = initialBalance;
+};
 
 const formatCurrency = (value: number): string => value.toFixed(2);
 const formatSignedCurrency = (value: number): string => (value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2));
@@ -393,8 +440,11 @@ const renderConfigSummary = (): void => {
   configTable.push(
     ['Símbolo', options.symbol],
     ['Intervalo', options.interval],
+    ['Modo', options.mode],
     ['Velas', options.limit.toString()],
+    ['Warmup (velas)', options.warmup.toString()],
     ['Delay (ms)', options.delay.toString()],
+    ['Timeout conexión (ms)', options.connectionTimeout.toString()],
     ['EMA rápida', options.fastPeriod.toString()],
     ['EMA lenta', options.slowPeriod.toString()],
     ['EMA tendencia', options.trendPeriod.toString()],
@@ -409,12 +459,13 @@ const renderConfigSummary = (): void => {
   console.log(configTable.toString());
 };
 
-const logEvent = (event: StrategyEvent): void => {
-  if (event.type === 'ENTRY') {
-    const table = createEventTable();
-    const label = chalk.bgGreen.black(' ENTRY ');
-    const sideLabel = event.side === 'LONG' ? chalk.green(event.side) : chalk.red(event.side);
+const logEvent = (
+  event: StrategyEvent,
+  { source = 'rest', silent = false }: { source?: RecordedEvent['source']; silent?: boolean } = {}
+): void => {
+  eventHistory.push({ ...event, source } as RecordedEvent);
 
+  if (event.type === 'ENTRY') {
     stats.openPosition = {
       side: event.side,
       entryPrice: event.price,
@@ -423,40 +474,51 @@ const logEvent = (event: StrategyEvent): void => {
       atr: event.atr
     };
 
-    table.push([
-      label,
-      sideLabel,
-      formatCurrency(event.price),
-      formatCurrency(event.stopLoss),
-      formatCurrency(event.takeProfit),
-      event.atr.toFixed(2),
-      chalk.gray('-'),
-      formatCurrency(stats.balance)
-    ]);
+    if (!silent) {
+      const table = createEventTable();
+      const label = chalk.bgGreen.black(' ENTRY ');
+      const sideLabel = event.side === 'LONG' ? chalk.green(event.side) : chalk.red(event.side);
 
-    console.log(table.toString());
-    console.log(chalk.gray(`   Motivo: ${event.reason}\n`));
-  } else {
+      table.push([
+        label,
+        sideLabel,
+        formatCurrency(event.price),
+        formatCurrency(event.stopLoss),
+        formatCurrency(event.takeProfit),
+        event.atr.toFixed(2),
+        chalk.gray('-'),
+        formatCurrency(stats.balance)
+      ]);
+
+      console.log(table.toString());
+      console.log(chalk.gray(`   Motivo: ${event.reason}\n`));
+    }
+
+    return;
+  }
+
+  const pnlColor = event.pnl >= 0 ? chalk.green : chalk.red;
+  const sideLabel = event.side === 'LONG' ? chalk.green(event.side) : chalk.red(event.side);
+  const rLabel = `${event.rMultiple.toFixed(2)}R`;
+  const positionSnapshot = stats.openPosition;
+  const stopDisplay = positionSnapshot ? formatCurrency(positionSnapshot.stopLoss) : chalk.gray('-');
+  const takeDisplay = positionSnapshot ? formatCurrency(positionSnapshot.takeProfit) : chalk.gray('-');
+
+  stats.totalTrades += 1;
+  if (event.pnl >= 0) stats.wins += 1;
+  else stats.losses += 1;
+
+  const newBalance = stats.balance + event.pnl;
+  stats.balance = newBalance;
+  stats.pnl += event.pnl;
+  stats.openPosition = null;
+  stats.peakBalance = Math.max(stats.peakBalance, stats.balance);
+  const drawdown = stats.peakBalance - stats.balance;
+  stats.maxDrawdown = Math.max(stats.maxDrawdown, drawdown);
+
+  if (!silent) {
     const table = createEventTable();
     const label = chalk.bgBlue.white(' EXIT ');
-    const pnlColor = event.pnl >= 0 ? chalk.green : chalk.red;
-    const sideLabel = event.side === 'LONG' ? chalk.green(event.side) : chalk.red(event.side);
-    const rLabel = `${event.rMultiple.toFixed(2)}R`;
-    const positionSnapshot = stats.openPosition;
-    const stopDisplay = positionSnapshot ? formatCurrency(positionSnapshot.stopLoss) : chalk.gray('-');
-    const takeDisplay = positionSnapshot ? formatCurrency(positionSnapshot.takeProfit) : chalk.gray('-');
-
-    stats.totalTrades += 1;
-    if (event.pnl >= 0) stats.wins += 1;
-    else stats.losses += 1;
-
-    const newBalance = stats.balance + event.pnl;
-    stats.balance = newBalance;
-    stats.pnl += event.pnl;
-    stats.openPosition = null;
-    stats.peakBalance = Math.max(stats.peakBalance, stats.balance);
-    const drawdown = stats.peakBalance - stats.balance;
-    stats.maxDrawdown = Math.max(stats.maxDrawdown, drawdown);
 
     table.push([
       label,
@@ -496,21 +558,24 @@ const renderSummary = (): void => {
   console.log('\n' + table.toString());
 };
 
-const saveReport = async (report: RunReport): Promise<string> => {
+const saveReport = async (report: RunReport, prefix = 'live'): Promise<string> => {
   const reportsDir = join(process.cwd(), 'reports');
   await mkdir(reportsDir, { recursive: true });
 
   const safeSymbol = report.metadata.symbol.toLowerCase().replace(/[^a-z0-9]/g, '') || 'symbol';
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = `live-${safeSymbol}-${timestamp}.json`;
+  const fileName = `${prefix}-${safeSymbol}-${timestamp}.json`;
   const filePath = join(reportsDir, fileName);
 
   await writeFile(filePath, JSON.stringify(report, null, 2), 'utf8');
   return filePath;
 };
 
-const run = async (): Promise<void> => {
+const runRestBacktest = async (): Promise<void> => {
   const startedAt = new Date();
+
+  resetStats();
+  eventHistory.length = 0;
 
   console.log(chalk.cyan.bold('=== Backtest en vivo: Scalping Pullback ==='));
   renderConfigSummary();
@@ -523,8 +588,7 @@ const run = async (): Promise<void> => {
     const events = strategy.update(candle, index);
 
     events.forEach((event) => {
-      eventHistory.push({ ...event });
-      logEvent(event);
+      logEvent(event, { source: 'rest' });
     });
 
     if (options.delay > 0) {
@@ -568,6 +632,7 @@ const run = async (): Promise<void> => {
 
   const report: RunReport = {
     metadata: {
+      mode: 'rest',
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       durationMs,
@@ -576,6 +641,9 @@ const run = async (): Promise<void> => {
       candlesProcessed: klines.length,
       delayMs: options.delay,
       preset: options.preset,
+      warmupCandles: 0,
+      connectionTimeoutMs: options.connectionTimeout,
+      liveCandlesProcessed: klines.length,
       candleWindow: {
         openTime: firstCandle ? firstCandle.openTime : null,
         closeTime: lastCandle ? lastCandle.closeTime : null,
@@ -593,11 +661,284 @@ const run = async (): Promise<void> => {
     openPosition: openPos ? { ...openPos } : null
   };
 
-  const reportPath = await saveReport(report);
+  const reportPath = await saveReport(report, 'live');
   console.log(chalk.cyan(`Reporte guardado en ${reportPath}`));
 };
 
-run().catch((error: unknown) => {
+const wsService = new WebSocketService();
+
+let streamShutdownResolver: (() => void) | null = null;
+let isShuttingDown = false;
+
+const streamState: {
+  warmupCandles: number;
+  liveCandlesProcessed: number;
+  firstWarmupCandle: Candle | null;
+  lastProcessedCandle: Candle | null;
+  firstLiveCandle: Candle | null;
+  startedAt: Date | null;
+  candleIndex: number;
+} = {
+  warmupCandles: 0,
+  liveCandlesProcessed: 0,
+  firstWarmupCandle: null,
+  lastProcessedCandle: null,
+  firstLiveCandle: null,
+  startedAt: null,
+  candleIndex: 0
+};
+
+const applyOpenPositionFromStrategy = (): void => {
+  const open = strategy.getOpenPosition();
+  if (open) {
+    stats.openPosition = {
+      side: open.side,
+      entryPrice: open.entryPrice,
+      stopLoss: open.stopLoss,
+      takeProfit: open.takeProfit,
+      atr: open.atrAtEntry
+    };
+  } else {
+    stats.openPosition = null;
+  }
+};
+
+const runLiveStream = async (): Promise<void> => {
+  const startedAt = new Date();
+  streamState.startedAt = startedAt;
+
+  console.log(chalk.cyan.bold('=== Scalping Pullback | Streaming WebSocket ==='));
+  renderConfigSummary();
+  console.log('\nPreparando warmup con datos históricos...\n');
+
+  let warmupCandles: Candle[] = [];
+  if (options.warmup > 0) {
+    warmupCandles = await client.getKlines(options.symbol, options.interval, {
+      limit: options.warmup
+    });
+  }
+
+  streamState.warmupCandles = warmupCandles.length;
+  streamState.firstWarmupCandle = warmupCandles[0] ?? null;
+  streamState.lastProcessedCandle = warmupCandles.length > 0 ? warmupCandles[warmupCandles.length - 1] : null;
+
+  warmupCandles.forEach((candle, index) => {
+    const events = strategy.update(candle, index);
+    streamState.candleIndex = index + 1;
+    events.forEach((event) => {
+      logEvent(event, { source: 'warmup', silent: true });
+    });
+  });
+
+  resetStats();
+  eventHistory.length = 0;
+  applyOpenPositionFromStrategy();
+
+  if (streamState.warmupCandles > 0) {
+    console.log(
+      chalk.cyan(
+        `Warmup completado: ${streamState.warmupCandles} velas procesadas antes de iniciar el streaming.`
+      )
+    );
+  } else {
+    console.log(chalk.cyan('Sin warmup histórico (warmup=0). Iniciando directamente el streaming.'));
+  }
+
+  if (stats.openPosition) {
+    console.log(
+      chalk.yellow(
+        '⚠️  La estrategia mantiene una posición abierta tras el warmup. Se continuará gestionándola en vivo.'
+      )
+    );
+  }
+
+  const symbolStream = `${options.symbol.toLowerCase()}@kline_${options.interval}`;
+
+  const processLiveCandle = (candle: Candle): void => {
+    const lastClose = streamState.lastProcessedCandle?.closeTime ?? 0;
+    if (candle.closeTime <= lastClose) {
+      return;
+    }
+
+    streamState.lastProcessedCandle = candle;
+    if (!streamState.firstLiveCandle) {
+      streamState.firstLiveCandle = candle;
+    }
+
+    const events = strategy.update(candle, streamState.candleIndex);
+    streamState.candleIndex += 1;
+    streamState.liveCandlesProcessed += 1;
+    events.forEach((event) => {
+      logEvent(event, { source: 'live' });
+    });
+  };
+
+  wsService.connectToStream(symbolStream, {
+    autoReconnect: true,
+    connectionTimeout: options.connectionTimeout,
+    onOpen: () => {
+      console.log(chalk.green(`✅ Conectado al stream ${symbolStream}`));
+      console.log(chalk.gray('Presioná CTRL+C para cerrar y guardar el reporte.\n'));
+    },
+    onError: (error) => {
+      console.error(chalk.red(`❌ Error en stream: ${error.message}`));
+    },
+    onClose: (code, reason) => {
+      console.warn(chalk.yellow(`⚠️  Stream cerrado (${code}) - ${reason.toString()}`));
+    },
+    onMessage: (raw) => {
+      try {
+        const data = raw as { k?: { [key: string]: unknown } };
+        if (!data || !data.k) {
+          return;
+        }
+        const kline = data.k as {
+          t: number;
+          o: string;
+          h: string;
+          l: string;
+          c: string;
+          v: string;
+          T: number;
+          q: string;
+          n: number;
+          V: string;
+          Q: string;
+          B?: unknown;
+          x: boolean;
+        };
+        if (!kline.x) {
+          return; // vela aún en formación
+        }
+
+        const candle = new Candle({
+          openTime: kline.t,
+          open: parseFloat(kline.o),
+          high: parseFloat(kline.h),
+          low: parseFloat(kline.l),
+          close: parseFloat(kline.c),
+          volume: parseFloat(kline.v),
+          closeTime: kline.T,
+          quoteVolume: parseFloat(kline.q),
+          trades: kline.n,
+          takerBuyBaseVolume: parseFloat(kline.V),
+          takerBuyQuoteVolume: parseFloat(kline.Q),
+          ignore: kline.B
+        });
+
+        processLiveCandle(candle);
+      } catch (error) {
+        console.error(chalk.red(`Error procesando kline: ${(error as Error).message}`));
+      }
+    }
+  });
+
+  const shutdown = async (signal: string): Promise<void> => {
+    if (isShuttingDown) {
+      return;
+    }
+    isShuttingDown = true;
+
+    console.log(chalk.yellow(`\nRecibido ${signal}. Cerrando stream y generando reporte...`));
+    wsService.closeAllStreams();
+
+    const finishedAt = new Date();
+    const durationMs = streamState.startedAt
+      ? finishedAt.getTime() - streamState.startedAt.getTime()
+      : 0;
+    const winRate = stats.totalTrades > 0 ? stats.wins / stats.totalTrades : 0;
+    const averageTradePnl = stats.totalTrades > 0 ? stats.pnl / stats.totalTrades : 0;
+    const statsSnapshot: Stats = {
+      ...stats,
+      openPosition: stats.openPosition ? { ...stats.openPosition } : null
+    };
+
+    const summary: RunSummary = {
+      initialBalance,
+      finalBalance: stats.balance,
+      netPnl: stats.pnl,
+      totalTrades: stats.totalTrades,
+      wins: stats.wins,
+      losses: stats.losses,
+      winRate,
+      maxDrawdown: stats.maxDrawdown,
+      averageTradePnl
+    };
+
+    const tradeStatistics = strategy.getTradeStatistics();
+    const marketRegime = strategy.getMarketRegime();
+
+    const firstCandle =
+      streamState.firstWarmupCandle ?? streamState.firstLiveCandle ?? streamState.lastProcessedCandle;
+    const lastCandle = streamState.lastProcessedCandle;
+
+    const report: RunReport = {
+      metadata: {
+        mode: 'stream',
+        startedAt: streamState.startedAt ? streamState.startedAt.toISOString() : startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs,
+        symbol: options.symbol,
+        interval: options.interval,
+        candlesProcessed: streamState.warmupCandles + streamState.liveCandlesProcessed,
+        warmupCandles: streamState.warmupCandles,
+        liveCandlesProcessed: streamState.liveCandlesProcessed,
+        delayMs: options.delay,
+        connectionTimeoutMs: options.connectionTimeout,
+        preset: options.preset,
+        candleWindow: {
+          openTime: firstCandle ? firstCandle.openTime : null,
+          closeTime: lastCandle ? lastCandle.closeTime : null,
+          openTimeISO: firstCandle ? new Date(firstCandle.openTime).toISOString() : null,
+          closeTimeISO: lastCandle ? new Date(lastCandle.closeTime).toISOString() : null
+        }
+      },
+      options: { ...options },
+      strategyConfig: { ...strategyConfig },
+      stats: statsSnapshot,
+      summary,
+      tradeStatistics,
+      marketRegime,
+      events: eventHistory.map((event) => ({ ...event })),
+      openPosition: strategy.getOpenPosition()
+    };
+
+    renderSummary();
+
+    const reportPath = await saveReport(report, 'live-stream');
+    console.log(chalk.cyan(`Reporte guardado en ${reportPath}`));
+
+    if (streamShutdownResolver) {
+      streamShutdownResolver();
+    }
+  };
+
+  const gracefulExit = async (signal: NodeJS.Signals): Promise<void> => {
+    await shutdown(signal);
+    process.exit(0);
+  };
+
+  process.on('SIGINT', (signal) => {
+    void gracefulExit(signal);
+  });
+  process.on('SIGTERM', (signal) => {
+    void gracefulExit(signal);
+  });
+
+  await new Promise<void>((resolve) => {
+    streamShutdownResolver = resolve;
+  });
+};
+
+const main = async (): Promise<void> => {
+  if (options.mode === 'stream') {
+    await runLiveStream();
+  } else {
+    await runRestBacktest();
+  }
+};
+
+main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(chalk.red(`❌ Error en el backtest: ${message}`));
   process.exit(1);
