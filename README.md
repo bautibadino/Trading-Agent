@@ -99,6 +99,7 @@ package-lock.json
 - Ejecutá `npm run live` para simular secuencialmente velas históricas en consola o `npm run live:help` para ver todas las flags y presets (`eth-scalp`, `btc-scalp-fast`, etc.).
 - Flags disponibles: `--symbol`, `--interval`, `--limit`, `--delay`, `--fast`, `--slow`, `--trend`, `--atr`, `--atrStop`, `--atrTp`, `--size`, `--minAtr`, `--balance`. Ahora podés usarlas tanto con `--clave=valor` como con `--clave valor`.
 - Salida mejorada: cada entrada/salida se imprime en tablas con colores, mostrando SL/TP, ATR/R múltiple, PnL y balance actualizado para facilitar la lectura en consola.
+- Cada corrida guarda un JSON en `reports/` con todos los parámetros usados, eventos (entradas/salidas) y métricas de performance para análisis posterior.
 - Resumen final en tabla con capital inicial, PnL neto, trades, win rate y drawdown máximo.
 
 ## ➡️ Qué hacer a partir de aquí

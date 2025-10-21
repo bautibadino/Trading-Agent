@@ -2,10 +2,17 @@
 
 import chalk from 'chalk';
 import Table from 'cli-table3';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { BinanceClient } from '../src/index.js';
 import { Candle } from '../src/models/Candle.js';
-import { ScalpingPullbackStrategy, StrategyEvent } from '../src/strategies/ScalpingPullbackStrategy.js';
+import { ScalpingPullbackStrategy } from '../src/strategies/ScalpingPullbackStrategy.js';
+import type {
+  StrategyConfig,
+  StrategyEvent,
+  StrategyPosition
+} from '../src/strategies/ScalpingPullbackStrategy.js';
 
 interface CLIOptions {
   symbol: string;
@@ -21,6 +28,7 @@ interface CLIOptions {
   positionSize: number;
   minAtr: number;
   initialBalance: number;
+  preset?: string;
 }
 
 interface PresetConfig {
@@ -170,11 +178,12 @@ const parseCliOptions = (): CLIOptions => {
     trendPeriod: 50,
     atrPeriod: 14,
     atrStop: 1.2,
-    atrTp: 1.8,
-    positionSize: 1,
-    minAtr: 0,
-    initialBalance: 0
-  };
+  atrTp: 1.8,
+  positionSize: 1,
+  minAtr: 0,
+  initialBalance: 0,
+  preset: undefined
+};
 
   let options: CLIOptions = { ...defaults };
 
@@ -187,6 +196,7 @@ const parseCliOptions = (): CLIOptions => {
       process.exit(1);
     }
     options = { ...options, ...preset.config };
+    options.preset = presetKey;
   }
 
   const assignString = (apply: (value: string) => void, ...keys: string[]): void => {
@@ -276,16 +286,19 @@ const options = parseCliOptions();
 const client = new BinanceClient();
 const initialBalance = options.initialBalance;
 
-const strategy = new ScalpingPullbackStrategy({
+const strategyConfig: StrategyConfig = {
   fastPeriod: options.fastPeriod,
   slowPeriod: options.slowPeriod,
   trendPeriod: options.trendPeriod,
   atrPeriod: options.atrPeriod,
   atrStopMultiplier: options.atrStop,
   atrTakeProfitMultiplier: options.atrTp,
+  basePositionSize: options.positionSize,
   positionSize: options.positionSize,
   minAtr: options.minAtr
-});
+};
+
+const strategy = new ScalpingPullbackStrategy(strategyConfig);
 
 interface Stats {
   balance: number;
@@ -304,6 +317,48 @@ interface Stats {
   peakBalance: number;
 }
 
+interface RunSummary {
+  initialBalance: number;
+  finalBalance: number;
+  netPnl: number;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  maxDrawdown: number;
+  averageTradePnl: number;
+}
+
+interface RunReport {
+  metadata: {
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    symbol: string;
+    interval: string;
+    candlesProcessed: number;
+    delayMs: number;
+    preset?: string;
+    candleWindow: {
+      openTime: number | null;
+      closeTime: number | null;
+      openTimeISO: string | null;
+      closeTimeISO: string | null;
+    };
+  };
+  options: CLIOptions;
+  strategyConfig: StrategyConfig;
+  stats: Stats;
+  summary: RunSummary;
+  tradeStatistics: {
+    consecutiveWins: number;
+    consecutiveLosses: number;
+  };
+  marketRegime: string;
+  events: StrategyEvent[];
+  openPosition: StrategyPosition | null;
+}
+
 const stats: Stats = {
   balance: initialBalance,
   openPosition: null,
@@ -314,6 +369,8 @@ const stats: Stats = {
   maxDrawdown: 0,
   peakBalance: initialBalance
 };
+
+const eventHistory: StrategyEvent[] = [];
 
 const formatCurrency = (value: number): string => value.toFixed(2);
 const formatSignedCurrency = (value: number): string => (value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2));
@@ -439,7 +496,22 @@ const renderSummary = (): void => {
   console.log('\n' + table.toString());
 };
 
+const saveReport = async (report: RunReport): Promise<string> => {
+  const reportsDir = join(process.cwd(), 'reports');
+  await mkdir(reportsDir, { recursive: true });
+
+  const safeSymbol = report.metadata.symbol.toLowerCase().replace(/[^a-z0-9]/g, '') || 'symbol';
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const fileName = `live-${safeSymbol}-${timestamp}.json`;
+  const filePath = join(reportsDir, fileName);
+
+  await writeFile(filePath, JSON.stringify(report, null, 2), 'utf8');
+  return filePath;
+};
+
 const run = async (): Promise<void> => {
+  const startedAt = new Date();
+
   console.log(chalk.cyan.bold('=== Backtest en vivo: Scalping Pullback ==='));
   renderConfigSummary();
   console.log('\nDescargando datos...\n');
@@ -451,6 +523,7 @@ const run = async (): Promise<void> => {
     const events = strategy.update(candle, index);
 
     events.forEach((event) => {
+      eventHistory.push({ ...event });
       logEvent(event);
     });
 
@@ -465,6 +538,63 @@ const run = async (): Promise<void> => {
   }
 
   renderSummary();
+
+  const finishedAt = new Date();
+  const durationMs = finishedAt.getTime() - startedAt.getTime();
+  const winRate = stats.totalTrades > 0 ? stats.wins / stats.totalTrades : 0;
+  const averageTradePnl = stats.totalTrades > 0 ? stats.pnl / stats.totalTrades : 0;
+  const statsSnapshot: Stats = {
+    ...stats,
+    openPosition: stats.openPosition ? { ...stats.openPosition } : null
+  };
+
+  const summary: RunSummary = {
+    initialBalance,
+    finalBalance: stats.balance,
+    netPnl: stats.pnl,
+    totalTrades: stats.totalTrades,
+    wins: stats.wins,
+    losses: stats.losses,
+    winRate,
+    maxDrawdown: stats.maxDrawdown,
+    averageTradePnl
+  };
+
+  const tradeStatistics = strategy.getTradeStatistics();
+  const marketRegime = strategy.getMarketRegime();
+
+  const firstCandle = klines[0] ?? null;
+  const lastCandle = klines.length > 0 ? klines[klines.length - 1] : null;
+
+  const report: RunReport = {
+    metadata: {
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      durationMs,
+      symbol: options.symbol,
+      interval: options.interval,
+      candlesProcessed: klines.length,
+      delayMs: options.delay,
+      preset: options.preset,
+      candleWindow: {
+        openTime: firstCandle ? firstCandle.openTime : null,
+        closeTime: lastCandle ? lastCandle.closeTime : null,
+        openTimeISO: firstCandle ? new Date(firstCandle.openTime).toISOString() : null,
+        closeTimeISO: lastCandle ? new Date(lastCandle.closeTime).toISOString() : null
+      }
+    },
+    options: { ...options },
+    strategyConfig: { ...strategyConfig },
+    stats: statsSnapshot,
+    summary,
+    tradeStatistics,
+    marketRegime,
+    events: eventHistory.map((event) => ({ ...event })),
+    openPosition: openPos ? { ...openPos } : null
+  };
+
+  const reportPath = await saveReport(report);
+  console.log(chalk.cyan(`Reporte guardado en ${reportPath}`));
 };
 
 run().catch((error: unknown) => {
