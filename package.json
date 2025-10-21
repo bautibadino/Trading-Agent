@@ -1,0 +1,43 @@
+{
+  "name": "trading-bot-market-core",
+  "version": "1.0.0",
+  "description": "Clientes HTTP/WebSocket m\u00ednimos para Binance",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prews": "npm run build",
+    "ws": "npx --yes node@22 --dns-result-order=ipv4first dist/scripts/ws-listener.js",
+    "prerest": "npm run build",
+    "rest": "node dist/scripts/rest-example.js",
+    "prelive": "npm run build",
+    "live": "node dist/scripts/live-scalping-backtest.js",
+    "prelive:eth": "npm run build",
+    "live:eth": "node dist/scripts/live-scalping-backtest.js --preset=eth-scalp",
+    "prelive:btc": "npm run build",
+    "live:btc": "node dist/scripts/live-scalping-backtest.js --preset=btc-scalp-fast",
+    "live:help": "node dist/scripts/live-scalping-backtest.js --help"
+  },
+  "keywords": [
+    "trading",
+    "binance",
+    "market-data",
+    "websocket"
+  ],
+  "author": "Bautista Badino",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "chalk": "^5.6.2",
+    "cli-table3": "^0.6.5",
+    "trading-signals": "^7.0.0",
+    "ws": "^8.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.4.5"
+  }
+}
