@@ -79,15 +79,56 @@ ws.connectToTicker('ETHUSDT', (ticker) => {
 });
 ```
 
+## 🌐 Servidor API (NUEVO)
+
+El proyecto ahora incluye un servidor Express que expone los datos y logs vía REST API, perfecto para usar desde un frontend remoto.
+
+### Ejecutar el servidor localmente:
+
+```bash
+npm run build
+npm start
+```
+
+El servidor se iniciará en `http://localhost:3000`
+
+### Endpoints disponibles:
+
+- `GET /health` - Health check
+- `GET /api/logs?timeframe=1m&symbol=ETHUSDT&limit=100` - Obtener logs
+- `GET /api/logs/files?timeframe=1m` - Listar archivos disponibles
+- `GET /api/logs/stats` - Estadísticas de logs
+- `POST /api/collectors/start` - Iniciar un collector
+
+Ver [`DEPLOYMENT.md`](./DEPLOYMENT.md) para más detalles sobre deployment en producción.
+
+## 🚀 Deployment en Producción
+
+El proyecto está listo para deployar en Railway, Render, Fly.io, o cualquier plataforma compatible con Node.js.
+
+**Guía completa**: Ver [`DEPLOYMENT.md`](./DEPLOYMENT.md)
+
+**Deployment rápido en Railway:**
+1. Push tu código a GitHub
+2. Conecta tu repo en Railway
+3. Railway detectará automáticamente `railway.json` y deployará
+4. Accede a tu API desde la URL proporcionada
+
 ## 🗂️ Estructura
 ```
 scripts/                # Ejemplos ejecutables (REST y WebSocket)
 src/
   config/env.example    # Plantilla opcional para credenciales
+  server/               # Servidor Express API (NUEVO)
+    index.ts            # Servidor principal
   index.ts              # Punto de entrada que reexporta servicios/modelos
   models/               # Candle / Trade (TypeScript)
   services/             # BinanceClient / WebSocketService (TypeScript)
 dist/                  # Salida compilada por tsc (generada)
+logs/                  # Logs de market data por timeframe
+railway.json           # Configuración para Railway
+nixpacks.toml          # Configuración de build para Railway
+Procfile               # Para Heroku/otros
 tsconfig.json
 .gitignore
 package.json

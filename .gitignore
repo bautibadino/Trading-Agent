@@ -11,9 +11,12 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
-# Logs
-logs
+# Logs - Mantener estructura de carpetas pero ignorar archivos
+logs/**/*.jsonl
+logs/**/*.log
 *.log
+!logs/.gitkeep
+!logs/*/.gitkeep
 
 # Runtime data
 pids
