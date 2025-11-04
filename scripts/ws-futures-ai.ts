@@ -17,8 +17,7 @@ import WebSocket from 'ws';
 import chalk from 'chalk';
 import { RSI, SMA, EMA } from 'trading-signals';
 import axios from 'axios';
-import { writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { MarketDataService } from '../src/server/services/MarketDataService.js';
 
 interface CliOptions {
   symbol?: string;
@@ -79,24 +78,12 @@ if (!INTERVAL_MS[interval]) {
   process.exit(1);
 }
 
-// Configurar archivo de log organizado por timeframe
-// Estructura: logs/1m/market-data-BTCUSDT-2025-11-04.jsonl
-const logsDir = join(process.cwd(), 'logs', interval);
-if (!existsSync(logsDir)) {
-  mkdirSync(logsDir, { recursive: true });
-}
-
-// Nombre del archivo: market-data-SYMBOL-YYYY-MM-DD.jsonl
-const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-const logFileName = `market-data-${symbol}-${today}.jsonl`;
-const logFilePath = join(logsDir, logFileName);
-
-console.log(chalk.blue.bold('\n🤖 MODO AI-DATA JSON - Binance FUTURES'));
+console.log(chalk.blue.bold('\n🤖 MODO PRISMA - Binance FUTURES'));
 console.log(chalk.blue('━'.repeat(80)));
 console.log(chalk.cyan(`📡 Símbolo: ${symbol}`));
 console.log(chalk.cyan(`⏱️  Intervalo Kline: ${interval}`));
 console.log(chalk.cyan(`⏰ Timeout: ${timeout}ms`));
-console.log(chalk.cyan(`💾 Archivo de log: logs/${interval}/${logFileName}`));
+console.log(chalk.cyan(`💾 Almacenamiento: PostgreSQL + Prisma Accelerate`));
 console.log(chalk.blue('━'.repeat(80)));
 console.log(chalk.yellow('\n📊 Streams activos:'));
 console.log(chalk.gray('   • aggTrade       → Trades agregados con lado comprador/vendedor'));
@@ -488,7 +475,7 @@ ws.on('close', (code, reason) => {
 });
 
 // Generar y emitir JSON cada 60 segundos
-setInterval(() => {
+setInterval(async () => {
   const timestamp = new Date().toISOString();
   
   // Calcular valores
@@ -594,13 +581,23 @@ setInterval(() => {
   console.log(JSON.stringify(marketData, null, 2));
   console.log(''); // Línea en blanco para separación
   
-  // Guardar JSON en archivo (formato JSONL - una línea por JSON)
+  // Guardar en Prisma (PostgreSQL)
   try {
-    appendFileSync(logFilePath, JSON.stringify(marketData) + '\n', 'utf-8');
-    console.log(chalk.gray(`💾 Guardado en: ${logFileName}`));
+    await MarketDataService.saveMarketData({
+      timestamp: new Date(timestamp),
+      symbol,
+      timeframe: interval,
+      lastPrice: marketData.lastPrice,
+      orderbook: marketData.orderbook,
+      micro_flow: marketData.micro_flow,
+      indicators: marketData.indicators,
+      heuristics: marketData.heuristics,
+      market_stats: marketData.market_stats,
+    });
+    console.log(chalk.green(`✅ Guardado en PostgreSQL (${symbol} ${interval})`));
     console.log('');
   } catch (error) {
-    console.error(chalk.red(`❌ Error guardando log: ${(error as Error).message}`));
+    console.error(chalk.red(`❌ Error guardando en BD: ${(error as Error).message}`));
   }
   
   // Reiniciar contadores del período

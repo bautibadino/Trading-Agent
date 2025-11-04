@@ -33,10 +33,10 @@ async function testConnection() {
     }
     console.log();
 
-    // Test 4: Contar candles
-    console.log('✅ Test 4: Contando candles en la BD...');
-    const candlesCount = await prisma.candle.count();
-    console.log(`   ✓ Total de candles: ${candlesCount}\n`);
+    // Test 4: Contar market data
+    console.log('✅ Test 4: Contando market data en la BD...');
+    const marketDataCount = await prisma.marketData.count();
+    console.log(`   ✓ Total de market data: ${marketDataCount}\n`);
 
     // Test 5: Contar trades
     console.log('✅ Test 5: Contando trades en la BD...');

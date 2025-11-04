@@ -11,12 +11,15 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
-# Logs - Mantener estructura de carpetas pero ignorar archivos
+# Logs - YA NO SE USAN (migrado a PostgreSQL)
+# Mantener carpetas por compatibilidad pero ignorar contenido
 logs/**/*.jsonl
 logs/**/*.log
 *.log
 !logs/.gitkeep
 !logs/*/.gitkeep
+
+# Nota: Los datos ahora se guardan en PostgreSQL con Prisma
 
 # Runtime data
 pids
@@ -80,6 +83,3 @@ temp/
 # data/
 # *.csv
 # *.json
-
-# Collector state (se regenera automáticamente)
-collectors-state.json

@@ -1,64 +1,84 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_DATABASE_URL")
 }
 
 model Collector {
-  id         Int      @id @default(autoincrement())
-  pid        Int      @unique
-  timeframe  String   @db.VarChar(10)
-  symbol     String   @db.VarChar(20)
-  status     String   @db.VarChar(20) @default("running")
-  startedAt  DateTime @default(now()) @map("started_at")
-  stoppedAt  DateTime? @map("stopped_at")
-  
-  @@map("collectors")
+  id        Int       @id @default(autoincrement())
+  pid       Int       @unique
+  timeframe String    @db.VarChar(10)
+  symbol    String    @db.VarChar(20)
+  status    String    @default("running") @db.VarChar(20)
+  startedAt DateTime  @default(now()) @map("started_at")
+  stoppedAt DateTime? @map("stopped_at")
+
   @@index([status])
   @@index([symbol, timeframe])
+  @@map("collectors")
 }
 
-model Candle {
-  id            Int      @id @default(autoincrement())
-  symbol        String   @db.VarChar(20)
-  timeframe     String   @db.VarChar(10)
-  openTime      DateTime @map("open_time")
-  closeTime     DateTime @map("close_time")
-  open          Float
-  high          Float
-  low           Float
-  close         Float
-  volume        Float
-  createdAt     DateTime @default(now()) @map("created_at")
-  
-  @@map("candles")
-  @@unique([symbol, timeframe, openTime])
-  @@index([symbol, timeframe, openTime])
+model MarketData {
+  id                Int      @id @default(autoincrement())
+  timestamp         DateTime
+  symbol            String   @db.VarChar(20)
+  timeframe         String   @db.VarChar(10)
+  lastPrice         Float    @map("last_price")
+  bestBidPrice      Float    @map("best_bid_price")
+  bestBidQty        Float    @map("best_bid_qty")
+  bestAskPrice      Float    @map("best_ask_price")
+  bestAskQty        Float    @map("best_ask_qty")
+  midPrice          Float    @map("mid_price")
+  spread            Float
+  spreadBps         Float    @map("spread_bps")
+  imbalance         Float
+  microprice        Float
+  takerBuyQuote     Float    @map("taker_buy_quote")
+  takerSellQuote    Float    @map("taker_sell_quote")
+  takerBuyRatio     Float    @map("taker_buy_ratio")
+  rsi14             Float?
+  sma20             Float?
+  ema9              Float?
+  ema21             Float?
+  volatility        Float?
+  ema9Above21       Boolean? @map("ema9_above21")
+  rsiState          String   @map("rsi_state") @db.VarChar(20)
+  buyPressure       Boolean  @map("buy_pressure")
+  fundingRate       Float    @map("funding_rate")
+  indexPrice        Float    @map("index_price")
+  volume24h         Float    @map("volume_24h")
+  high24h           Float    @map("high_24h")
+  low24h            Float    @map("low_24h")
+  openInterest      Float?   @map("open_interest")
+  liquidationVolume Float    @map("liquidation_volume")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@unique([symbol, timeframe, timestamp])
+  @@index([symbol, timeframe, timestamp(sort: Desc)])
+  @@index([symbol, timeframe])
+  @@index([timestamp(sort: Desc)])
+  @@map("market_data")
 }
 
 model Trade {
-  id            Int      @id @default(autoincrement())
-  symbol        String   @db.VarChar(20)
-  side          String   @db.VarChar(10) // "BUY" or "SELL"
-  entryPrice    Float    @map("entry_price")
-  exitPrice     Float?   @map("exit_price")
+  id            Int       @id @default(autoincrement())
+  symbol        String    @db.VarChar(20)
+  side          String    @db.VarChar(10)
+  entryPrice    Float     @map("entry_price")
+  exitPrice     Float?    @map("exit_price")
   quantity      Float
   profit        Float?
-  profitPercent Float?   @map("profit_percent")
-  reason        String?  @db.Text
-  entryTime     DateTime @map("entry_time")
+  profitPercent Float?    @map("profit_percent")
+  reason        String?
+  entryTime     DateTime  @map("entry_time")
   exitTime      DateTime? @map("exit_time")
-  status        String   @db.VarChar(20) @default("open") // "open", "closed", "cancelled"
-  
-  @@map("trades")
+  status        String    @default("open") @db.VarChar(20)
+
   @@index([symbol, status])
   @@index([entryTime])
+  @@map("trades")
 }
-

@@ -2,11 +2,10 @@
 
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
-import { readdir, readFile, stat } from 'fs/promises';
-import { join } from 'path';
-import { existsSync } from 'fs';
 import { spawn } from 'child_process';
+import { join } from 'path';
 import { CollectorDatabaseService } from './services/CollectorDatabaseService.js';
+import { MarketDataService } from './services/MarketDataService.js';
 
 const app: Express = express();
 const PORT = process.env.PORT || 3000;
@@ -24,210 +23,95 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-// API Routes
+// API Routes - Market Data (reemplaza logs)
 app.get('/api/logs', async (req: Request, res: Response) => {
   try {
-    const { timeframe, symbol, date, limit } = req.query;
-    const logsDir = join(process.cwd(), 'logs');
+    const { timeframe, symbol, startDate, endDate, limit, offset } = req.query;
+
+    // Parsear fechas si existen
+    let parsedStartDate: Date | undefined;
+    let parsedEndDate: Date | undefined;
     
-    if (!existsSync(logsDir)) {
-      return res.json({ logs: [], total: 0 });
+    if (startDate) {
+      parsedStartDate = new Date(startDate as string);
     }
-
-    // Si no especifica timeframe, listar todos los disponibles
-    if (!timeframe) {
-      const timeframes = await readdir(logsDir, { withFileTypes: true });
-      const dirs = timeframes
-        .filter(d => d.isDirectory())
-        .map(d => d.name);
-      
-      return res.json({ 
-        timeframes: dirs,
-        message: 'Especifica ?timeframe=1m para obtener logs de un timeframe específico'
-      });
-    }
-
-    const timeframeDir = join(logsDir, timeframe as string);
-    if (!existsSync(timeframeDir)) {
-      return res.status(404).json({ error: `Timeframe ${timeframe} no encontrado` });
-    }
-
-    // Listar archivos disponibles
-    const files = await readdir(timeframeDir);
-    let matchingFiles = files.filter(f => f.endsWith('.jsonl'));
-
-    // Filtrar por símbolo si se especifica
-    if (symbol) {
-      matchingFiles = matchingFiles.filter(f => 
-        f.includes(`-${(symbol as string).toUpperCase()}-`)
-      );
-    }
-
-    // Filtrar por fecha si se especifica
-    if (date) {
-      matchingFiles = matchingFiles.filter(f => f.includes(date as string));
-    }
-
-    // Si no hay archivos, devolver vacío
-    if (matchingFiles.length === 0) {
-      return res.json({ logs: [], total: 0, files: [] });
-    }
-
-    // Leer el archivo más reciente si no se especifica fecha
-    const fileToRead = date 
-      ? matchingFiles.find(f => f.includes(date as string)) || matchingFiles[0]
-      : matchingFiles.sort().reverse()[0]; // Más reciente
-
-    const filePath = join(timeframeDir, fileToRead);
-    const fileContent = await readFile(filePath, 'utf-8');
-    const lines = fileContent.trim().split('\n').filter(l => l.trim());
     
-    // Parsear logs
-    let logs = lines.map(line => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    }).filter(l => l !== null);
-
-    // Filtrar por símbolo en los datos si no se hizo en el nombre del archivo
-    if (symbol && !date) {
-      logs = logs.filter((log: any) => 
-        log.symbol === (symbol as string).toUpperCase()
-      );
+    if (endDate) {
+      parsedEndDate = new Date(endDate as string);
     }
 
-    // Aplicar límite
-    const limitNum = limit ? parseInt(limit as string, 10) : 100;
-    if (limitNum > 0) {
-      logs = logs.slice(-limitNum); // Últimos N logs
-    }
+    // Obtener datos de Prisma
+    const result = await MarketDataService.getMarketData({
+      symbol: symbol ? (symbol as string).toUpperCase() : undefined,
+      timeframe: timeframe as string | undefined,
+      startDate: parsedStartDate,
+      endDate: parsedEndDate,
+      limit: limit ? parseInt(limit as string, 10) : 100,
+      offset: offset ? parseInt(offset as string, 10) : 0,
+    });
 
     res.json({
-      logs,
-      total: logs.length,
-      file: fileToRead,
-      timeframe,
+      logs: result.data,
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+      timeframe: timeframe || 'all',
       symbol: symbol || 'all'
     });
   } catch (error) {
-    console.error('Error reading logs:', error);
+    console.error('Error obteniendo market data:', error);
     res.status(500).json({ 
-      error: 'Error leyendo logs', 
+      error: 'Error obteniendo datos de mercado', 
       message: (error as Error).message 
     });
   }
 });
 
-// Endpoint para listar archivos disponibles
-app.get('/api/logs/files', async (req: Request, res: Response) => {
+// Endpoint para obtener último dato de mercado por símbolo/timeframe
+app.get('/api/logs/latest', async (req: Request, res: Response) => {
   try {
-    const { timeframe } = req.query;
-    const logsDir = join(process.cwd(), 'logs');
-    
-    if (!existsSync(logsDir)) {
-      return res.json({ files: [] });
+    const { symbol, timeframe } = req.query;
+
+    if (!symbol || !timeframe) {
+      return res.status(400).json({ 
+        error: 'symbol y timeframe son requeridos' 
+      });
     }
 
-    if (!timeframe) {
-      // Listar todos los timeframes con sus archivos
-      const timeframes = await readdir(logsDir, { withFileTypes: true });
-      const result: Record<string, any[]> = {};
-      
-      for (const tf of timeframes.filter(d => d.isDirectory())) {
-        const tfDir = join(logsDir, tf.name);
-        const files = await readdir(tfDir);
-        const filesWithStats = await Promise.all(
-          files.filter(f => f.endsWith('.jsonl')).map(async (f) => {
-            const filePath = join(tfDir, f);
-            const stats = await stat(filePath);
-            return {
-              name: f,
-              size: stats.size,
-              modified: stats.mtime.toISOString()
-            };
-          })
-        );
-        result[tf.name] = filesWithStats.sort((a, b) => 
-          b.modified.localeCompare(a.modified)
-        );
-      }
-      
-      return res.json({ files: result });
-    }
-
-    const timeframeDir = join(logsDir, timeframe as string);
-    if (!existsSync(timeframeDir)) {
-      return res.status(404).json({ error: `Timeframe ${timeframe} no encontrado` });
-    }
-
-    const files = await readdir(timeframeDir);
-    const filesWithStats = await Promise.all(
-      files.filter(f => f.endsWith('.jsonl')).map(async (f) => {
-        const filePath = join(timeframeDir, f);
-        const stats = await stat(filePath);
-        return {
-          name: f,
-          size: stats.size,
-          modified: stats.mtime.toISOString()
-        };
-      })
+    const latest = await MarketDataService.getLatest(
+      (symbol as string).toUpperCase(),
+      timeframe as string
     );
 
-    res.json({
-      timeframe,
-      files: filesWithStats.sort((a, b) => b.modified.localeCompare(a.modified))
-    });
+    if (!latest) {
+      return res.status(404).json({ 
+        error: 'No se encontraron datos para ese símbolo/timeframe' 
+      });
+    }
+
+    res.json(latest);
   } catch (error) {
-    console.error('Error listing files:', error);
+    console.error('Error obteniendo último dato:', error);
     res.status(500).json({ 
-      error: 'Error listando archivos', 
+      error: 'Error obteniendo último dato', 
       message: (error as Error).message 
     });
   }
 });
 
-// Endpoint para obtener estadísticas de logs
+// Endpoint para obtener estadísticas de market data
 app.get('/api/logs/stats', async (req: Request, res: Response) => {
   try {
-    const logsDir = join(process.cwd(), 'logs');
-    
-    if (!existsSync(logsDir)) {
-      return res.json({ stats: {} });
-    }
+    const { symbol, timeframe } = req.query;
 
-    const timeframes = await readdir(logsDir, { withFileTypes: true });
-    const stats: Record<string, any> = {};
-    
-    for (const tf of timeframes.filter(d => d.isDirectory())) {
-      const tfDir = join(logsDir, tf.name);
-      const files = await readdir(tfDir);
-      const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
-      
-      let totalSize = 0;
-      let totalLines = 0;
-      
-      for (const file of jsonlFiles) {
-        const filePath = join(tfDir, file);
-        const fileStats = await stat(filePath);
-        totalSize += fileStats.size;
-        
-        const content = await readFile(filePath, 'utf-8');
-        totalLines += content.trim().split('\n').filter(l => l.trim()).length;
-      }
-      
-      stats[tf.name] = {
-        files: jsonlFiles.length,
-        totalSize,
-        totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
-        totalLines
-      };
-    }
-    
+    const stats = await MarketDataService.getStats(
+      symbol as string | undefined,
+      timeframe as string | undefined
+    );
+
     res.json({ stats });
   } catch (error) {
-    console.error('Error getting stats:', error);
+    console.error('Error obteniendo estadísticas:', error);
     res.status(500).json({ 
       error: 'Error obteniendo estadísticas', 
       message: (error as Error).message 
@@ -262,7 +146,11 @@ app.post('/api/collectors/start', async (req: Request, res: Response) => {
       `--interval=${timeframe}`
     ], {
       detached: true,
-      stdio: 'ignore'
+      stdio: 'ignore',
+      env: {
+        ...process.env,  // Pasar TODAS las variables de entorno (incluye DATABASE_URL)
+        NODE_ENV: process.env.NODE_ENV || 'production'
+      }
     });
 
     collectorProcess.unref();
@@ -374,12 +262,15 @@ app.post('/api/collectors/stop', async (req: Request, res: Response) => {
 app.get('/', (_req: Request, res: Response) => {
   res.json({
     name: 'Trading Bot Market Data API',
-    version: '1.0.0',
+    version: '2.0.0',
+    storage: 'PostgreSQL + Prisma Accelerate',
     endpoints: {
       health: '/health',
-      logs: '/api/logs?timeframe=1m&symbol=ETHUSDT&limit=100',
-      files: '/api/logs/files?timeframe=1m',
-      stats: '/api/logs/stats',
+      marketData: {
+        get: 'GET /api/logs?timeframe=1m&symbol=ETHUSDT&limit=100&offset=0',
+        latest: 'GET /api/logs/latest?symbol=ETHUSDT&timeframe=1m',
+        stats: 'GET /api/logs/stats?symbol=ETHUSDT&timeframe=1m'
+      },
       collectors: {
         start: 'POST /api/collectors/start { "timeframe": "1m", "symbol": "ETHUSDT" }',
         status: 'GET /api/collectors/status',
