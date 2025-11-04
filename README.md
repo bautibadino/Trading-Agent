@@ -105,11 +105,42 @@ package-lock.json
 - Cada corrida guarda un JSON en `reports/` con todos los parámetros usados, eventos (entradas/salidas) y métricas de performance para análisis posterior (los archivos de streaming se guardan con prefijo `live-stream-*`).
 - Resumen final en tabla con capital inicial, PnL neto, trades, win rate y drawdown máximo.
 
+## 🤖 Sistema de Logs para IA (NUEVO)
+
+### Captura completa de market data en tiempo real
+
+El sistema ahora incluye captura profesional de datos en **6 timeframes simultáneos** con:
+
+✅ Order book (spread, imbalance, microprice)  
+✅ Micro flow (presión compradora/vendedora)  
+✅ Indicadores técnicos (RSI, EMA, SMA, Volatilidad)  
+✅ Market stats (funding rate, 24h stats, liquidaciones)  
+✅ Heurísticas pre-calculadas  
+
+```bash
+# Capturar todos los timeframes para BTCUSDT
+npm run start:all
+
+# O un solo timeframe
+npm run ws:futures:5m      # Emite JSON cada 5 minutos
+npm run ws:futures:1h      # Emite JSON cada hora
+
+# Ver los datos
+npm run logs -- --timeframe=5m --stats
+
+# Detener todo
+npm run stop:all
+```
+
+**Archivos generados**: `logs/1m/`, `logs/5m/`, `logs/15m/`, `logs/30m/`, `logs/1h/`, `logs/4h/`
+
+📖 **Ver guía completa**: [`QUICK_START_AI.md`](./QUICK_START_AI.md) y [`AI_LOGS_GUIDE.md`](./AI_LOGS_GUIDE.md)
+
 ## ➡️ Qué hacer a partir de aquí
 1. Crea tus propias estrategias o bots en nuevas carpetas (por ejemplo `strategies/` o `bots/`).
 2. Monta scripts o servicios que consuman `BinanceClient` / `WebSocketService`.
-3. Añade pruebas, linters o cualquier infraestructura adicional que necesites.
-4. Si querés levantar un API o CLI, constrúyelo encima de estos componentes limpios.
+3. Usa el sistema de logs para entrenar o alimentar agentes de IA.
+4. Añade pruebas, linters o cualquier infraestructura adicional que necesites.
+5. Si querés levantar un API o CLI, constrúyelo encima de estos componentes limpios.
 
 Con esta base liviana controlás exactamente qué lógica volver a construir, sin arrastrar código heredado. ¡A experimentar! 💡
-# Trading-Agent
