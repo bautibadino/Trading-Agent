@@ -40,6 +40,7 @@
     "logs": "node dist/scripts/read-logs.js",
     "pretest:db": "npm run build",
     "test:db": "node dist/scripts/test-db-connection.js",
+    "cleanup:collectors": "npm run build && node dist/scripts/cleanup-collectors.js",
     "start:all": "./scripts/start-all-timeframes.sh",
     "stop:all": "./scripts/stop-all-timeframes.sh"
   },

@@ -15,11 +15,20 @@ export interface CollectorWithUptime extends CollectorData {
 export class CollectorDatabaseService {
   /**
    * Guarda un nuevo collector en la base de datos
+   * Si el PID ya existe, lo actualiza en lugar de crear uno nuevo
    */
   static async saveCollector(data: CollectorData): Promise<void> {
     try {
-      await prisma.collector.create({
-        data: {
+      await prisma.collector.upsert({
+        where: { pid: data.pid },
+        update: {
+          timeframe: data.timeframe,
+          symbol: data.symbol,
+          status: data.status,
+          startedAt: data.startedAt,
+          stoppedAt: null, // Reset stoppedAt si se reinicia
+        },
+        create: {
           pid: data.pid,
           timeframe: data.timeframe,
           symbol: data.symbol,

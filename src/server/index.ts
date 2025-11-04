@@ -137,6 +137,24 @@ app.post('/api/collectors/start', async (req: Request, res: Response) => {
       });
     }
 
+    // Verificar si ya existe un collector para este símbolo y timeframe
+    const existingCollectors = await CollectorDatabaseService.getCollectors();
+    const alreadyRunning = existingCollectors.find(
+      c => c.symbol === symbol && c.timeframe === timeframe && c.status === 'running'
+    );
+
+    if (alreadyRunning && CollectorDatabaseService.isPidAlive(alreadyRunning.pid)) {
+      return res.status(409).json({ 
+        error: `Ya existe un collector corriendo para ${symbol} en timeframe ${timeframe}`,
+        pid: alreadyRunning.pid
+      });
+    }
+
+    // Si el collector existe pero está muerto, limpiarlo
+    if (alreadyRunning && !CollectorDatabaseService.isPidAlive(alreadyRunning.pid)) {
+      await CollectorDatabaseService.stopCollector(alreadyRunning.pid);
+    }
+
     // Iniciar proceso de collector
     const scriptPath = join(process.cwd(), 'dist/scripts/ws-futures-ai.js');
     const collectorProcess = spawn('node', [
@@ -159,13 +177,27 @@ app.post('/api/collectors/start', async (req: Request, res: Response) => {
     
     // Guardar estado del collector en la base de datos
     if (pid) {
-      await CollectorDatabaseService.saveCollector({
-        pid,
-        timeframe,
-        symbol,
-        status: 'running',
-        startedAt: new Date()
-      });
+      try {
+        await CollectorDatabaseService.saveCollector({
+          pid,
+          timeframe,
+          symbol,
+          status: 'running',
+          startedAt: new Date()
+        });
+        console.log(`✅ Collector guardado: PID ${pid}, ${symbol}, ${timeframe}`);
+      } catch (dbError) {
+        console.error('Error guardando collector en DB:', dbError);
+        // Intentar detener el proceso si falla guardar en DB
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch (killError) {
+          console.error('Error deteniendo proceso:', killError);
+        }
+        throw dbError;
+      }
+    } else {
+      throw new Error('No se pudo obtener el PID del proceso');
     }
 
     res.json({ 
@@ -192,6 +224,32 @@ app.get('/api/collectors/status', async (_req: Request, res: Response) => {
     console.error('Error getting collectors status:', error);
     res.status(500).json({ 
       error: 'Error obteniendo estado de collectors', 
+      message: (error as Error).message 
+    });
+  }
+});
+
+// Endpoint para limpiar collectors muertos
+app.post('/api/collectors/cleanup', async (_req: Request, res: Response) => {
+  try {
+    const collectors = await CollectorDatabaseService.getCollectors();
+    let cleaned = 0;
+    
+    for (const collector of collectors) {
+      if (!CollectorDatabaseService.isPidAlive(collector.pid)) {
+        await CollectorDatabaseService.stopCollector(collector.pid);
+        cleaned++;
+      }
+    }
+
+    res.json({ 
+      message: `Limpieza completada: ${cleaned} collectors muertos marcados como stopped`,
+      cleaned
+    });
+  } catch (error) {
+    console.error('Error cleaning up collectors:', error);
+    res.status(500).json({ 
+      error: 'Error limpiando collectors', 
       message: (error as Error).message 
     });
   }
@@ -274,16 +332,36 @@ app.get('/', (_req: Request, res: Response) => {
       collectors: {
         start: 'POST /api/collectors/start { "timeframe": "1m", "symbol": "ETHUSDT" }',
         status: 'GET /api/collectors/status',
-        stop: 'POST /api/collectors/stop { "pid": 12345 }'
+        stop: 'POST /api/collectors/stop { "pid": 12345 }',
+        cleanup: 'POST /api/collectors/cleanup (limpia collectors muertos)'
       }
     },
     docs: 'https://github.com/bautistabadino/trading-bot'
   });
 });
 
+// Limpiar collectors muertos al inicio del servidor
+async function cleanupDeadCollectors() {
+  try {
+    const collectors = await CollectorDatabaseService.getCollectors();
+    for (const collector of collectors) {
+      if (!CollectorDatabaseService.isPidAlive(collector.pid)) {
+        await CollectorDatabaseService.stopCollector(collector.pid);
+        console.log(`🧹 Limpiado collector muerto: PID ${collector.pid}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error limpiando collectors:', error);
+  }
+}
+
 // Iniciar servidor
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Servidor API corriendo en puerto ${PORT}`);
   console.log(`📡 Health check: http://localhost:${PORT}/health`);
   console.log(`📊 Logs API: http://localhost:${PORT}/api/logs`);
+  
+  // Limpiar collectors muertos al iniciar
+  await cleanupDeadCollectors();
+  console.log('✅ Limpieza de collectors completada');
 });
