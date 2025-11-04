@@ -6,6 +6,7 @@ import { readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
+import { CollectorDatabaseService } from './services/CollectorDatabaseService.js';
 
 const app: Express = express();
 const PORT = process.env.PORT || 3000;
@@ -234,7 +235,7 @@ app.get('/api/logs/stats', async (req: Request, res: Response) => {
   }
 });
 
-// Endpoint para iniciar/detener collectors
+// Endpoint para iniciar collectors
 app.post('/api/collectors/start', async (req: Request, res: Response) => {
   try {
     const { timeframe, symbol = 'ETHUSDT' } = req.body;
@@ -266,14 +267,104 @@ app.post('/api/collectors/start', async (req: Request, res: Response) => {
 
     collectorProcess.unref();
 
+    const pid = collectorProcess.pid;
+    
+    // Guardar estado del collector en la base de datos
+    if (pid) {
+      await CollectorDatabaseService.saveCollector({
+        pid,
+        timeframe,
+        symbol,
+        status: 'running',
+        startedAt: new Date()
+      });
+    }
+
     res.json({ 
       message: `Collector iniciado para ${symbol} en timeframe ${timeframe}`,
-      pid: collectorProcess.pid
+      pid
     });
   } catch (error) {
     console.error('Error starting collector:', error);
     res.status(500).json({ 
       error: 'Error iniciando collector', 
+      message: (error as Error).message 
+    });
+  }
+});
+
+// Endpoint para obtener estado de collectors
+app.get('/api/collectors/status', async (_req: Request, res: Response) => {
+  try {
+    // Obtener collectors con uptime y verificación de PIDs vivos
+    const collectors = await CollectorDatabaseService.getCollectorsWithUptime();
+    
+    res.json({ collectors });
+  } catch (error) {
+    console.error('Error getting collectors status:', error);
+    res.status(500).json({ 
+      error: 'Error obteniendo estado de collectors', 
+      message: (error as Error).message 
+    });
+  }
+});
+
+// Endpoint para detener un collector
+app.post('/api/collectors/stop', async (req: Request, res: Response) => {
+  try {
+    const { pid } = req.body;
+    
+    if (!pid) {
+      return res.status(400).json({ error: 'PID requerido' });
+    }
+
+    // Verificar que el PID sea un número
+    const pidNum = parseInt(pid, 10);
+    if (isNaN(pidNum)) {
+      return res.status(400).json({ error: 'PID debe ser un número' });
+    }
+
+    // Verificar que el collector existe en la base de datos
+    const exists = await CollectorDatabaseService.existsByPid(pidNum);
+    
+    if (!exists) {
+      return res.status(404).json({ 
+        error: 'Collector no encontrado en el registro',
+        pid: pidNum
+      });
+    }
+
+    // Verificar que el proceso existe
+    if (!CollectorDatabaseService.isPidAlive(pidNum)) {
+      await CollectorDatabaseService.stopCollector(pidNum);
+      return res.status(404).json({ 
+        error: 'Collector no encontrado o ya detenido',
+        pid: pidNum
+      });
+    }
+
+    try {
+      // Intentar detener con SIGTERM (graceful shutdown)
+      process.kill(pidNum, 'SIGTERM');
+      
+      // Actualizar estado en la base de datos
+      await CollectorDatabaseService.stopCollector(pidNum);
+      
+      res.json({ 
+        message: 'Collector detenido exitosamente',
+        pid: pidNum
+      });
+    } catch (killError) {
+      console.error(`Error deteniendo collector ${pidNum}:`, killError);
+      res.status(500).json({ 
+        error: `Error deteniendo collector: ${(killError as Error).message}`,
+        pid: pidNum
+      });
+    }
+  } catch (error) {
+    console.error('Error stopping collector:', error);
+    res.status(500).json({ 
+      error: 'Error deteniendo collector', 
       message: (error as Error).message 
     });
   }
@@ -289,7 +380,11 @@ app.get('/', (_req: Request, res: Response) => {
       logs: '/api/logs?timeframe=1m&symbol=ETHUSDT&limit=100',
       files: '/api/logs/files?timeframe=1m',
       stats: '/api/logs/stats',
-      startCollector: 'POST /api/collectors/start { "timeframe": "1m", "symbol": "ETHUSDT" }'
+      collectors: {
+        start: 'POST /api/collectors/start { "timeframe": "1m", "symbol": "ETHUSDT" }',
+        status: 'GET /api/collectors/status',
+        stop: 'POST /api/collectors/stop { "pid": 12345 }'
+      }
     },
     docs: 'https://github.com/bautistabadino/trading-bot'
   });

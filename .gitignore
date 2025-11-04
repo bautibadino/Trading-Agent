@@ -80,3 +80,6 @@ temp/
 # data/
 # *.csv
 # *.json
+
+# Collector state (se regenera automáticamente)
+collectors-state.json

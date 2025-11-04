@@ -1,0 +1,64 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+model Collector {
+  id         Int      @id @default(autoincrement())
+  pid        Int      @unique
+  timeframe  String   @db.VarChar(10)
+  symbol     String   @db.VarChar(20)
+  status     String   @db.VarChar(20) @default("running")
+  startedAt  DateTime @default(now()) @map("started_at")
+  stoppedAt  DateTime? @map("stopped_at")
+  
+  @@map("collectors")
+  @@index([status])
+  @@index([symbol, timeframe])
+}
+
+model Candle {
+  id            Int      @id @default(autoincrement())
+  symbol        String   @db.VarChar(20)
+  timeframe     String   @db.VarChar(10)
+  openTime      DateTime @map("open_time")
+  closeTime     DateTime @map("close_time")
+  open          Float
+  high          Float
+  low           Float
+  close         Float
+  volume        Float
+  createdAt     DateTime @default(now()) @map("created_at")
+  
+  @@map("candles")
+  @@unique([symbol, timeframe, openTime])
+  @@index([symbol, timeframe, openTime])
+}
+
+model Trade {
+  id            Int      @id @default(autoincrement())
+  symbol        String   @db.VarChar(20)
+  side          String   @db.VarChar(10) // "BUY" or "SELL"
+  entryPrice    Float    @map("entry_price")
+  exitPrice     Float?   @map("exit_price")
+  quantity      Float
+  profit        Float?
+  profitPercent Float?   @map("profit_percent")
+  reason        String?  @db.Text
+  entryTime     DateTime @map("entry_time")
+  exitTime      DateTime? @map("exit_time")
+  status        String   @db.VarChar(20) @default("open") // "open", "closed", "cancelled"
+  
+  @@map("trades")
+  @@index([symbol, status])
+  @@index([entryTime])
+}
+
